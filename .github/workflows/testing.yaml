@@ -132,6 +132,10 @@ jobs:
             }
           }
           JSON
+          # The image runs as distroless "nonroot" (uid 65532). mktemp creates
+          # 0600 owned by the runner user, so without this the container cannot
+          # read its own config, exits immediately, and the poll below times out.
+          chmod 644 "$cfg"
           container="$(docker run --rm -d \
             -e LISTEN_ADDR=:9002 \
             -e CONFIG_FILE=/tmp/config.json \
@@ -142,6 +146,14 @@ jobs:
             if docker logs "$container" 2>&1 | grep -q "listening on"; then
               echo "extauth-server image booted and reported a listener"
               exit 0
+            fi
+            # Fail fast instead of burning the full 30s when the process is
+            # already gone: that is always a real startup failure.
+            if ! docker ps --format '{{.ID}}' | grep -q "^$container$"; then
+              echo "::error::extauth-server exited before reporting a listener"
+              wait "$container" 2>/dev/null || true
+              docker logs "$container" 2>&1 || true
+              exit 1
             fi
             sleep 1
           done
