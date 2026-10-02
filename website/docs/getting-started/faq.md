@@ -23,14 +23,14 @@ Please adjust your `authorization`-config accordingly.
 
 ## My IDP rejects the callback / login loops after upgrading
 
-If the IDP reports a `redirect_uri` mismatch and Traefik sits behind an ingress, load balancer or CDN, you are almost certainly missing [`trusted_proxies`](./middleware-configuration.md#trusted-proxies).
+If the IDP reports a `redirect_uri` mismatch and Traefik sits behind an ingress, load balancer or CDN, you are almost certainly missing [`trustedProxies`](./middleware-configuration.md#trusted-proxies).
 
-The plugin builds the `redirect_uri` it sends to the IDP from the incoming request, and only honours `X-Forwarded-Proto` / `X-Forwarded-Host` when the request actually arrived from a proxy you listed. With an empty `trusted_proxies` the forwarded headers are ignored, so behind an ingress the callback URL is built with the wrong host or scheme and the IDP refuses the callback.
+The plugin builds the `redirect_uri` it sends to the IDP from the incoming request, and only honours `X-Forwarded-Proto` / `X-Forwarded-Host` when the request actually arrived from a proxy you listed. With an empty `trustedProxies` the forwarded headers are ignored, so behind an ingress the callback URL is built with the wrong host or scheme and the IDP refuses the callback.
 
 ```yml
 traefik-oidc-auth:
   # highlight-start
-  trusted_proxies:
+  trustedProxies:
     - "10.42.0.0/16"   # the CIDR of the hop in front of Traefik
   # highlight-end
 ```

@@ -100,5 +100,5 @@ A login in progress expires after **10 minutes**. The `state` parameter is seale
 :::
 
 :::note
-Logout clears the session cookie in **that browser** only. Because sessions are stateless there is no server-side session to terminate, so other browsers holding the same cookie keep working until `max_session_lifetime_seconds` elapses. With [`revoke_tokens_on_logout`](./middleware-configuration.md#provider) enabled (default) the refresh token of that session is also revoked at the IDP. See [Security Considerations](./security-considerations.md).
+Logout clears the session cookie in **that browser** only. Because sessions are stateless there is no server-side session to terminate, so other browsers holding the same cookie keep working until `maxSessionLifetimeSeconds` elapses. With [`revokeTokensOnLogout`](./middleware-configuration.md#provider) enabled (default) the refresh token of that session is also revoked at the IDP. See [Security Considerations](./security-considerations.md).
 :::

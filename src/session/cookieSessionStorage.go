@@ -74,9 +74,16 @@ func (storage *CookieSessionStorage) TryGetSession(logger *logging.Logger, confi
 	if state.CreatedAt.IsZero() {
 		// Sealed before the lifetime bounds existed. Backfill rather than reject:
 		// dropping every live cookie on upgrade would be a self-inflicted outage.
+		//
+		// The backfill is in-memory only - it reaches the browser when the ticket is
+		// next re-sealed. The middleware makes that happen on the first authenticated
+		// request (sessionLifetimeStampDue in src/main.go), so maxSessionLifetimeSeconds
+		// starts bounding this session immediately instead of only after the first
+		// renewal. The two halves have to stay together: without that re-store the
+		// stamp is discarded at the end of every request and the bound never fires.
 		state.CreatedAt = state.LastUsedAt
 		if state.CreatedAt.IsZero() {
-			state.CreatedAt = time.Now()
+			state.CreatedAt = time.Now().UTC()
 		}
 	}
 	if state.LastUsedAt.IsZero() {

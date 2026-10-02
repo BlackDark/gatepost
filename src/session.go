@@ -271,19 +271,28 @@ func (toa *TraefikOidcAuth) validateToken(session *session.SessionState) (bool, 
 	return ok, claims, err
 }
 
-func (toa *TraefikOidcAuth) storeSessionAndAttachCookie(session *session.SessionState, rw http.ResponseWriter) {
+// storeSessionAndAttachCookie seals the session and emits the session cookie.
+//
+// On failure it writes the 500 itself and returns a non-nil error. The response is
+// then committed, so EVERY caller must return immediately on a non-nil error and
+// must not forward the request upstream or redirect: a superseded WriteHeader is
+// silently dropped, the body would be spliced onto the error, and the backend would
+// serve a request whose session this middleware just declared unpersistable.
+func (toa *TraefikOidcAuth) storeSessionAndAttachCookie(session *session.SessionState, rw http.ResponseWriter) error {
 	sessionTicket, err := toa.SessionStorage.StoreSession(toa.logger, toa.Config, session.Id, session)
 	if err != nil {
 		toa.logger.Log(logging.LevelError, "Failed to store session: %s", err.Error())
 		// Do not echo err.Error(): ErrSessionTooLarge and marshal failures describe
 		// internal limits and configuration, which is not the caller's business.
 		http.Error(rw, "Failed to store session", http.StatusInternalServerError)
-		return
+		return err
 	}
 
 	toa.logger.Log(logging.LevelDebug, "Session stored. Id %s", session.Id)
 
 	setChunkedCookies(toa.Config, rw, getSessionCookieName(toa.Config), sessionTicket)
+
+	return nil
 }
 
 // warnedSameSites tracks the invalid same_site values already reported. src.New rejects

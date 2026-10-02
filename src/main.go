@@ -34,8 +34,9 @@ import (
 // header it likes, so leaving them in place lets a caller claim to be any user on
 // every path that reaches the backend without this middleware having verified
 // them: the bypass-rule path, unauthenticatedBehavior: Forward and
-// unauthorizedBehavior: Forward. They are removed unconditionally and then
-// re-set from the session by attachHeaders.
+// unauthorizedBehavior: Forward. They are removed unconditionally, on every
+// path. On the authenticated path they are re-set from the verified session by
+// attachHeaders; on the forward paths they are simply absent.
 var clientIdentityHeaders = []string{
 	"X-Forwarded-User",
 	"X-Forwarded-Groups",
@@ -173,7 +174,7 @@ func (toa *TraefikOidcAuth) effectiveValidIssuer() string {
 // from.
 func (toa *TraefikOidcAuth) requestScheme(req *http.Request) string {
 	if toa.requestFromTrustedProxy(req) {
-		if proto := firstForwardedValue(req.Header.Get("X-Forwarded-Proto")); proto != "" {
+		if proto := lastForwardedValue(req.Header.Get("X-Forwarded-Proto")); proto != "" {
 			if validForwardedProto(proto) {
 				return proto
 			}
@@ -193,7 +194,10 @@ func (toa *TraefikOidcAuth) requestScheme(req *http.Request) string {
 // trusted-proxy gating as requestScheme.
 func (toa *TraefikOidcAuth) requestHost(req *http.Request) string {
 	if toa.requestFromTrustedProxy(req) {
-		if host := firstForwardedValue(req.Header.Get("X-Forwarded-Host")); host != "" {
+		// An empty (or whitespace-only) rightmost entry is not a usable value, and
+		// falling back to a client-supplied leftmost entry is exactly the hole this
+		// function exists to close. Fall through to req.Host instead.
+		if host := lastForwardedValue(req.Header.Get("X-Forwarded-Host")); host != "" {
 			return host
 		}
 	}
@@ -271,12 +275,27 @@ func validForwardedProto(proto string) bool {
 	return false
 }
 
-// firstForwardedValue returns the first entry of a possibly comma-separated
-// forwarding header, which is the hop closest to the client.
-func firstForwardedValue(value string) string {
+// lastForwardedValue returns the RIGHTMOST entry of a possibly comma-separated
+// forwarding header.
+//
+// The rightmost entry is the one appended by the hop closest to us. Every entry to
+// its left travelled through hops we did not vet, and in the most common deployment
+// the leftmost entry is literally whatever the client sent - a client that sends
+// "X-Forwarded-Host: evil.example, real.example" through an APPENDING trusted proxy
+// produces exactly that header, where "real.example" is the trusted proxy's own entry
+// and "evil.example" is attacker-controlled. Reading leftmost therefore let a client
+// choose the host and scheme that end up in the redirect_uri sent to the IDP and in
+// every absolute URL this middleware emits.
+//
+// This is safe for both proxy styles: a REPLACING proxy emits a single entry, for
+// which rightmost == leftmost, so the value it sets is still honoured.
+//
+// Returns "" when the header is absent, empty, or its rightmost entry is
+// whitespace-only, so the caller falls back to the request's own values.
+func lastForwardedValue(value string) string {
 	value = strings.TrimSpace(value)
-	if index := strings.Index(value, ","); index >= 0 {
-		value = strings.TrimSpace(value[:index])
+	if index := strings.LastIndex(value, ","); index >= 0 {
+		value = strings.TrimSpace(value[index+1:])
 	}
 
 	return value
@@ -367,7 +386,7 @@ func (toa *TraefikOidcAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 	// Only short-circuit when there is no session material that would have to be
 	// validated (and would therefore need discovery).
 	if isPublic && !toa.hasSessionMaterial(req) {
-		toa.forwardToUpstream(rw, req, nil, nil, true, false)
+		toa.forwardToUpstream(rw, req)
 		return
 	}
 
@@ -420,8 +439,14 @@ func (toa *TraefikOidcAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 			return
 		}
 
-		if updateSession || toa.sessionIdleRefreshDue(sess.Id) {
-			toa.storeSessionAndAttachCookie(sess, rw)
+		if toa.sessionStoreDue(sess.Id, updateSession) {
+			// A ticket that could not be sealed has already been answered with a 500.
+			// The response is committed: forwarding now would splice a backend body
+			// onto our error, and the backend would serve a request whose session we
+			// just declared unpersistable. Stop here.
+			if toa.storeSessionAndAttachCookie(sess, rw) != nil {
+				return
+			}
 			toa.sessionWrites.mark(sess.Id)
 		}
 
@@ -431,7 +456,7 @@ func (toa *TraefikOidcAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 	}
 
 	if isPublic {
-		toa.forwardToUpstream(rw, req, nil, nil, true, false)
+		toa.forwardToUpstream(rw, req)
 		return
 	}
 
@@ -473,22 +498,22 @@ func (toa *TraefikOidcAuth) hasSessionMaterial(req *http.Request) bool {
 }
 
 // forwardToUpstream strips the internal cookies and every client-supplied
-// identity header, then re-applies the configured headers, so a configured
-// header is Set from the session instead of being inherited from the caller.
-// claims is accepted for symmetry with the authenticated path; the forward paths
-// this is called from have no claims, so pass nil.
-func (toa *TraefikOidcAuth) forwardToUpstream(rw http.ResponseWriter, req *http.Request, sess *session.SessionState, claims map[string]interface{}, isPublicRoute bool, isAuthorized bool) { //nolint:unparam // claims is nil on every forward path
+// identity header, then forwards. It is only used on paths where there is no
+// verified identity to convey: a bypassAuthenticationRule match,
+// unauthenticatedBehavior: Forward, and unauthorizedBehavior: Forward.
+//
+// No configured header is attached here on purpose. Every caller reaches this
+// function without claims, and text/template renders a nil-map field access as
+// the literal string "<no value>". Setting a header with that value is worse
+// than not setting it: a backend that treats the PRESENCE of an identity header
+// as proof of authentication (X-Forwarded-User, X-Auth-Request-User, ...) would
+// accept an unauthenticated caller. Stripping the spoofable headers stays; it
+// is the only thing this path may do to the identity headers.
+//
+// Header attachment for authenticated requests happens in ServeHTTP, where a
+// real session and claims exist.
+func (toa *TraefikOidcAuth) forwardToUpstream(rw http.ResponseWriter, req *http.Request) {
 	toa.sanitizeForUpstream(req)
-
-	if sess == nil {
-		sess = &session.SessionState{}
-	}
-
-	if err := toa.attachHeaders(req, sess, claims, isPublicRoute, isAuthorized); err != nil {
-		// Nothing useful can be done about a bad header template at this point and
-		// it must not turn into a 500 on a path the operator declared public.
-		toa.logger.Log(logging.LevelError, "Error while attaching headers: %s", err.Error())
-	}
 
 	toa.next.ServeHTTP(rw, req)
 }
@@ -598,6 +623,50 @@ func (toa *TraefikOidcAuth) sessionIdleRefreshDue(sessionId string) bool {
 	}
 
 	return time.Since(lastWrite) >= time.Duration(interval)*time.Second
+}
+
+// sessionStoreDue is the single decision point for re-sealing a session ticket on
+// an authenticated request. It exists so every reason to persist a session
+// (renewal, idle-bound durability, lifetime-stamp durability) is decided in one
+// place, and so the FIX 4 backfill rule cannot drift from the machinery that
+// carries it.
+func (toa *TraefikOidcAuth) sessionStoreDue(sessionId string, updatedSession bool) bool {
+	return updatedSession ||
+		toa.sessionIdleRefreshDue(sessionId) ||
+		toa.sessionLifetimeStampDue(sessionId)
+}
+
+// sessionLifetimeStampDue reports whether the durable ticket this request arrived
+// with may be missing its session_created_at stamp, and therefore has to be
+// re-sealed once so maxSessionLifetimeSeconds becomes enforceable.
+//
+// A ticket sealed before the lifetime bounds existed carries no CreatedAt, and the
+// backfill that TryGetSession performs is in-memory only: without a re-store it is
+// thrown away at the end of the request, so the absolute bound would only start
+// counting at the first renewal - effectively unbounded when session_idle_timeout_
+// seconds is 0 and tokens are never renewed.
+//
+// There is no way to ask a stateless cookie whether it was stamped, so this uses
+// the existing sessionWriteTracker: a session id this process has never written a
+// ticket for is a ticket this process did not seal, and that is exactly the
+// condition under which the stamp may be missing. It fires at most once per session
+// per process, and only when the operator configured an absolute bound at all -
+// re-stamping is harmless because StoreSession only sets CreatedAt when it is zero.
+// The per-request AuthorizationHeader/AuthorizationCookie pseudo-sessions are
+// excluded for the same reason as in sessionIdleRefreshDue: they have no cookie of
+// their own, and re-storing one would mint a session cookie out of a header value.
+func (toa *TraefikOidcAuth) sessionLifetimeStampDue(sessionId string) bool {
+	if toa.Config == nil || toa.Config.MaxSessionLifetimeSeconds <= 0 {
+		return false
+	}
+
+	if sessionId == "" || sessionId == "AuthorizationHeader" || sessionId == "AuthorizationCookie" {
+		return false
+	}
+
+	_, writtenBefore := toa.sessionWrites.lastWrite(sessionId)
+
+	return !writtenBefore
 }
 
 func withSuffixPrefix(suffixPrefix string, values any, format string) any {
@@ -804,16 +873,28 @@ func (toa *TraefikOidcAuth) handleCallback(rw http.ResponseWriter, req *http.Req
 			return
 		}
 
-		if !toa.authTimeIsFresh(claims, time.Now()) {
-			// Step-up requested (provider.max_auth_age_seconds): the IdP handed back
-			// an authentication that is too old. Fail closed instead of accepting a
-			// stale session.
+		// provider.max_auth_age_seconds is a STEP-UP control, and it is only ever sent
+		// to the IdP on a challenge request (see authParamsForChallenge). Enforcing a
+		// fresh auth_time on a plain login is therefore incoherent - the IdP was never
+		// asked to re-authenticate, and with verification_token: Introspection the
+		// claims carry no auth_time at all, so every ordinary login would 403 and lock
+		// every user out of a route that was merely configured with the feature.
+		//
+		// When the request WAS a challenge the control means what it says, and it fails
+		// closed: a stale or missing auth_time is refused, with no session issued.
+		if state.IsChallenge && !toa.authTimeIsFresh(claims, time.Now()) {
 			toa.logger.Log(logging.LevelWarn, "Rejecting login: the IDP authentication is older than provider.max_auth_age_seconds")
 			toa.writeUnauthorizedError(rw, req)
 			return
 		}
 
-		sess := toa.establishSession(rw, token, claims, state)
+		sess, err := toa.establishSession(rw, token, claims, state)
+		if err != nil {
+			// establishSession has already answered the request with a 500. Continuing
+			// would write a second status onto the committed response (and could
+			// redirect a login whose session was never sealed).
+			return
+		}
 
 		if toa.Config.Provider.UsePkceBool {
 			clearLegacyCodeVerifierCookies(toa.Config, rw, req, toa.CallbackURL)
@@ -939,7 +1020,10 @@ func (toa *TraefikOidcAuth) validateCallbackToken(rw http.ResponseWriter, token 
 
 // establishSession creates the session for a validated callback and attaches it
 // to the response.
-func (toa *TraefikOidcAuth) establishSession(rw http.ResponseWriter, token *oidc.OidcTokenResponse, claims map[string]interface{}, state *oidc.OidcState) *session.SessionState {
+//
+// A non-nil error means the session could not be sealed; the response has already
+// been answered with a 500 and the caller must return without touching rw again.
+func (toa *TraefikOidcAuth) establishSession(rw http.ResponseWriter, token *oidc.OidcTokenResponse, claims map[string]interface{}, state *oidc.OidcState) (*session.SessionState, error) {
 	isAuthorized := isAuthorized(toa.logger, toa.Config.Authorization, claims)
 
 	sess := &session.SessionState{
@@ -953,10 +1037,14 @@ func (toa *TraefikOidcAuth) establishSession(rw http.ResponseWriter, token *oidc
 		ChallengeAttempted: state.IsChallenge,
 	}
 
-	toa.storeSessionAndAttachCookie(sess, rw)
+	if err := toa.storeSessionAndAttachCookie(sess, rw); err != nil {
+		// The 500 is already written. Returning nil here stops the caller from
+		// redirecting the user onwards with a session that was never persisted.
+		return nil, err
+	}
 	toa.sessionWrites.mark(sess.Id)
 
-	return sess
+	return sess, nil
 }
 
 func (toa *TraefikOidcAuth) handleLogout(rw http.ResponseWriter, req *http.Request, session *session.SessionState) {
@@ -1123,8 +1211,9 @@ func (toa *TraefikOidcAuth) handleUnauthenticated(rw http.ResponseWriter, req *h
 		// Respond with 401 Unauthorized
 		toa.writeUnauthenticatedError(rw, req)
 	case "Forward":
-		// Forward request
-		toa.forwardToUpstream(rw, req, nil, nil, false, false)
+		// Forward request, with every client-supplied identity header stripped and
+		// no configured header set: there is no verified identity to convey.
+		toa.forwardToUpstream(rw, req)
 	case "Auto":
 		if utils.IsHtmlRequest(req) {
 			// Handle login for HTML requests
@@ -1173,7 +1262,10 @@ func (toa *TraefikOidcAuth) handleUnauthorized(rw http.ResponseWriter, req *http
 			http.Redirect(rw, req, redirectUrlOverride, http.StatusFound)
 			return
 		}
-		toa.forwardToUpstream(rw, req, session, nil, false, false)
+		// The session is valid but not authorized for this route. It carries no
+		// verified identity for the upstream (claims are not evaluated on this
+		// path), so only the spoofable client headers are stripped.
+		toa.forwardToUpstream(rw, req)
 	default:
 		toa.writeUnauthorizedError(rw, req)
 	}

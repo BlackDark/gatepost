@@ -14,11 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- **Fixed:** the multi-arch image check in CI failed on every run because the
-  multi-platform build used the default docker exporter, which cannot write a
-  manifest list. It now uses `type=cacheonly`, so the cross-compile is still
-  verified for both published platforms without exporting anything.
-
 ### Security
 
 - Updated the Go toolchain floor to 1.26.8 in both modules. Go 1.26.5 carried
@@ -29,9 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server panic on requests with a missing authority/Host header
   (GO-2026-6443) and heap exhaustion via HTTP/2 DATA frame fragmentation
   (GO-2026-6348). Both were reachable from the gRPC ext_authz listener.
-
-### Security
-
 - Introspection responses now honour the `active` flag; an inactive token no
   longer validates just because it is well-formed and unexpired.
 - Front-channel logout now requires `sid` **or** `id_token_hint` in addition to
@@ -59,16 +51,26 @@ Three rounds of security fixes have landed together in this release. The
 behaviour changes a user will actually observe, and the config key that
 preserves the old behaviour, are:
 
+- **`sessionIdleTimeoutSeconds` assumes one replica.** The "last used" timestamp
+  is written back at most once per refresh interval *per process*, tracked in an
+  in-memory map that is not shared between replicas. With `N` replicas behind a
+  load balancer the effective refresh rate is roughly `N` times the documented
+  one, so the "exceeds the bound by at most one interval" claim holds for a
+  single replica only. The error is in the safe direction: more frequent
+  refreshes make the idle bound *tighter*, never looser, so an idle session is
+  still terminated no later than the configured bound plus the load balancer's
+  own skew.
+
 - **Forwarded headers are only honoured from a proxy you declare.** The
   `redirect_uri` sent to the IDP, and every other absolute URL built from the
   request (post-login and post-logout redirect targets, the `loginUri` /
   `logoutUri` links on the error pages, and the scheme/host check that decides
   whether an inbound request is the OAuth callback), are now derived from the
-  request itself unless the peer is in `trusted_proxies`. Previously
+  request itself unless the peer is in `trustedProxies`. Previously
   `X-Forwarded-Proto` and `X-Forwarded-Host` were trusted unconditionally.
-  Set `trusted_proxies` to the CIDR of the ingress / load balancer in front of
+  Set `trustedProxies` to the CIDR of the ingress / load balancer in front of
   Traefik. **There is no key that restores unconditional trust** — an empty
-  `trusted_proxies` is the fail-closed default, which is correct when Traefik
+  `trustedProxies` is the fail-closed default, which is correct when Traefik
   is reachable directly.
 - **BREAKING CHANGE: sessions are purpose-bound, with a legacy fallback.**
   Session cookies are now sealed with the `session` purpose bound into the
@@ -96,36 +98,133 @@ preserves the old behaviour, are:
   through this endpoint.
 - **BREAKING CHANGE: invalid enum values fail at startup.**
   `provider.verification_token` (anything other than `AccessToken`, `IdToken`,
-  `Introspection`) and `session_storage_type` (anything other than `Cookie`) now
+  `Introspection`) and `sessionStorageType` (anything other than `Cookie`) now
   abort the middleware's `New()` instead of failing every login at request
   time. A config copied from a fork that supports other values will refuse to
-  start; remove the key. Set `session_storage_type: "Cookie"` explicitly if the
+  start; remove the key. Set `sessionStorageType: "Cookie"` explicitly if the
   key must be present.
+- **BREAKING CHANGE: an unparseable `trustedProxies` entry fails at startup.**
+  Entries are parsed as CIDR ranges, and one that does not parse now aborts the
+  middleware's `New()` instead of being silently skipped. A config that used to
+  start with a typo'd or non-CIDR entry (an IP with a prefix but no mask, a
+  hostname, an empty string) now refuses to start. Fix or remove the entry.
+- **BREAKING CHANGE: a reserved key in `authorizationParams` fails at startup.**
+  Reserved protocol parameters (`response_type`, `client_id`, `redirect_uri`,
+  `state`, `scope`, `resource`, `code_challenge`, `code_challenge_method`,
+  `nonce`) previously produced a warning and the key was ignored. The plugin now
+  aborts `New()` when any of them is present. Remove the reserved keys you do
+  not actually need; the plugin sets them itself.
+- **BREAKING CHANGE (packaging): release images can no longer be published from
+  prerelease tags.** The release workflow refuses any tag carrying a `-` suffix
+  or a `+build` suffix, so `v1.2.3-rc1` — and anything like it — is rejected
+  rather than published. Publish a prerelease only after removing the suffix, or
+  by other means; do not assume `rc` publishing still works.
+- **Config key casing is not interchangeable between the two config surfaces.**
+  Traefik decodes the plugin config with `mapstructure` and **no** tag name, so
+  it matches the Go struct field name case-insensitively and **ignores** the
+  `json` tags entirely: Traefik YAML keys must be camelCase (`logLevel`,
+  `sessionCookie`, `cookieNamePrefix`, `trustedProxies`,
+  `maxSessionLifetimeSeconds`, `sessionIdleTimeoutSeconds`,
+  `sessionStorageType`, `authorizationParamsOverridable`,
+  `provider.clientId`, `provider.oidcTimeoutSeconds`,
+  `provider.revokeTokensOnLogout`, `provider.maxAuthAgeSeconds`). A snake_case
+  key silently decodes to its zero value — the option appears configured and
+  does nothing. `cmd/extauth-server`'s `CONFIG_FILE` is a different surface: it
+  is decoded with `encoding/json`, so it uses the snake_case `json` tags
+  (`log_level`, `session_cookie`, `cookie_name_prefix`,
+  `max_session_lifetime_seconds`, `provider.client_id`,
+  `provider.client_secret`). Same option, two casings, two files. Two options
+  are **not** even the same option:
+  - **`trustedProxies` / `trusted_proxies` are different mechanisms.** The
+    Traefik plugin gates its `X-Forwarded-*` handling on the `trustedProxies`
+    **config key**. `extauth-server` gates the same handling on the
+    **`TRUSTED_PROXIES` environment variable** (`parseTrustedProxies(os.Getenv(...))`
+    in `cmd/extauth-server/main.go`, matched against the TCP peer in
+    `forwardedRequest`); the `trusted_proxies` key in `CONFIG_FILE` decodes into
+    `config.TrustedProxies` and is never read on that path. Setting one does not
+    set the other.
+  - **Boolean options are `*_bool` on the JSON surface.** Every `bool` provider
+    option is declared in Go as a `string` field plus a separate `bool` field
+    carrying the `*_bool` json tag. The string field serves Traefik's weakly-typed
+    `mapstructure` decoder and `${VAR}` expansion. `encoding/json` is strictly
+    typed, so in `CONFIG_FILE` only the `*_bool` key accepts a JSON boolean;
+    `"revoke_tokens_on_logout": true` aborts startup with `json: cannot unmarshal
+    bool into Go struct field ...` and the process exits `1`.
 
 ### Added
 
-- `max_session_lifetime_seconds` — hard upper bound on total session lifetime.
-  `0` (default) disables it and logs a `WARN` at startup.
-- `session_idle_timeout_seconds` — bound on the gap between accepted requests on
+- `maxSessionLifetimeSeconds` — hard upper bound on total session lifetime.
+  `0` (default) disables it and logs a `WARN` at startup. A session ticket sealed
+  before the creation timestamp existed carries none, so its bound is backfilled
+  from first use and only becomes enforceable against its true age once the ticket
+  has been re-sealed.
+- `sessionIdleTimeoutSeconds` — bound on the gap between accepted requests on
   one session. `0` (default) disables it. The durable timestamp is refreshed at
   most once per quarter of the bound (capped at 60s) rather than on every
-  request, so a session can exceed it by at most one refresh interval.
-- `trusted_proxies` — CIDR ranges of proxies whose `X-Forwarded-Proto` /
+  request, so a session can exceed it by at most one refresh interval. That
+  "one interval" bound assumes a single replica; see [Upgrading](#upgrading).
+- `trustedProxies` — CIDR ranges of proxies whose `X-Forwarded-Proto` /
   `X-Forwarded-Host` may be trusted. Empty by default (trust nothing). An
   unparseable entry fails the middleware at startup.
-- `authorization_params_overridable` — allowlist of `authorizationParams` keys an
+- `authorizationParamsOverridable` — allowlist of `authorizationParams` keys an
   incoming request may override via query parameter. Empty by default, which
   pins every configured value, including `prompt`.
-- `provider.max_auth_age_seconds` — makes `unauthorizedBehavior: Challenge` a
-  real step-up by sending `max_age` and requiring a recent `auth_time` claim. A
-  missing `auth_time` is treated as a failure.
-- `provider.oidc_timeout_seconds` — client-side timeout bounding every outbound
+- `provider.maxAuthAgeSeconds` — enforces the step-up freshness requirement on a
+  **challenge** (`unauthorizedBehavior: Challenge`): sends `max_age` and requires
+  a recent `auth_time` claim. A missing `auth_time` is treated as a failure. A
+  plain login (`unauthenticatedBehavior: Challenge` / `Auto`) and session renewals
+  are unaffected. **Not usable with `provider.tokenValidation: Introspection`**:
+  RFC 7662 introspection responses carry no `auth_time`, so a challenge would
+  never be satisfiable and the user would be denied.
+- `provider.oidcTimeoutSeconds` — client-side timeout bounding every outbound
   IDP call. Default `30`; `0` and negative values resolve to the default.
-- `provider.revoke_tokens_on_logout` (default `true`) — revokes the session's
+- `provider.revokeTokensOnLogout` (default `true`) — revokes the session's
   refresh token at the IDP's `revocation_endpoint` on user-initiated logout and
   on front-channel logout. Silently skipped when no endpoint is advertised.
 - Route matching is anchored: a configured route matches exactly or below itself
   with a trailing slash, never as a bare path prefix.
+
+### Fixed
+
+### Fixed
+
+- **Security:** `X-Forwarded-Host` / `X-Forwarded-Proto` are now read from the
+  **rightmost** entry, not the leftmost. In an appending proxy chain the entry a
+  trusted hop added is the rightmost one, so the leftmost was client-controlled
+  and could steer the `redirect_uri` sent to the IDP and the absolute URLs this
+  plugin emits. The standalone `extauth-server` had the same defect plus no
+  scheme allowlist; both are fixed.
+- **Security:** an `includeWhen: Always` header on the bypass-rule and
+  `Forward` paths rendered the literal `<no value>`, because templating ran
+  against a nil claims map. A backend that treats the *presence* of an identity
+  header as authenticated could therefore be bypassed. Those paths no longer
+  render headers at all; the spoofable-identity-header stripping is unchanged.
+- `maxAuthAgeSeconds` is enforced only on a step-up **challenge**. It was
+  applied to every login, which contradicted the documentation and - combined
+  with `tokenValidation: Introspection`, whose responses carry no `auth_time`
+  claim - locked every user out.
+- A failed `StoreSession` (including `ErrSessionTooLarge`) no longer writes a
+  500 and then continues to forward the request upstream or redirect. The
+  response is written exactly once and the request stops.
+- The absolute session-lifetime bound is now real for session tickets sealed
+  before this release: their creation timestamp is persisted on first sight
+  instead of restarting from zero on every request.
+- Config-key correctness: Traefik decodes plugin config with `mapstructure` and
+  **no** `TagName`, so it matches the Go field name case-insensitively and
+  ignores the `json` tags. Every option this release adds was documented in
+  `snake_case` and would have been silently ignored by every Traefik
+  deployment. Documentation now uses the camelCase Go field names, and a test
+  guards the divergence (see Added).
+- The `extauth-server` `CONFIG_FILE` example in the docs could not be loaded:
+  `revoke_tokens_on_logout` is a string field, so a JSON boolean aborted
+  startup with exit code 1. `trusted_proxies` was also documented for
+  `CONFIG_FILE`, where it is inert - HTTP mode is gated by the `TRUSTED_PROXIES`
+  environment variable.
+
+- The multi-arch image check in CI failed on every run because the
+  multi-platform build used the default docker exporter, which cannot write a
+  manifest list. It now uses `type=cacheonly`, so the cross-compile is still
+  verified for both published platforms without exporting anything.
 
 ### Fixed
 

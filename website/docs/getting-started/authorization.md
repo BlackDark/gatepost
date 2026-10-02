@@ -92,7 +92,7 @@ Authorization rules are per-middleware, not per-route. To apply a different `ass
 :::
 
 :::warning
-Sending a user back through the IDP (`unauthorizedBehavior: Challenge`) does **not** by itself force a fresh authentication — if the user still has a live SSO session at the IDP, the redirect returns immediately with the old one. Set [`provider.max_auth_age_seconds`](./middleware-configuration.md#step-up-authentication) to require a recent `auth_time` claim, otherwise a route that claims to require fresh authentication can be satisfied by an authentication from hours ago.
+Sending a user back through the IDP (`unauthorizedBehavior: Challenge`) does **not** by itself force a fresh authentication — if the user still has a live SSO session at the IDP, the redirect returns immediately with the old one. Set [`provider.maxAuthAgeSeconds`](./middleware-configuration.md#step-up-authentication) to require a recent `auth_time` claim on the challenge, otherwise a route that claims to require fresh authentication can be satisfied by an authentication from hours ago. The freshness check applies **only** to the challenge; a plain login is unaffected.
 :::
 
 ### When is authorization checked?

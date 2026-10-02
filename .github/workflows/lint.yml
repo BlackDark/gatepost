@@ -1,5 +1,8 @@
 name: Lint
-
+# Deliberately NO paths filter. testing.yaml and e2e-tests.yml both skip
+# website/** changes, so this workflow is the only required check a
+# website-only PR runs - which is exactly why the website job below builds the
+# site and does not just lint it. Do not narrow these triggers to Go paths.
 on:
   push:
     branches: [main]
@@ -114,6 +117,16 @@ jobs:
 
       - name: Lint
         run: bun run lint
+
+      # Not optional polish: website/docusaurus.config.ts sets
+      # onBrokenLinks: 'throw', so a single bad relative link (or a broken MDX
+      # import) fails the entire production build. Nothing else in CI built the
+      # site, which is how a broken-link regression reached this branch with the
+      # whole pipeline green. Runs after the Biome lint so cheap feedback comes
+      # first; no extra setup needed because the bun toolchain and the frozen
+      # lockfile install are already above.
+      - name: Build
+        run: bun run build
 
   e2e:
     name: E2E (Biome)

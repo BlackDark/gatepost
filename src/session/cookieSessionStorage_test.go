@@ -1,10 +1,13 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
 
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
@@ -138,5 +141,75 @@ func TestStoreSession_TryGetSession_RoundTrip(t *testing.T) {
 func TestMaxTicketSizeMatchesChunkBudget(t *testing.T) {
 	if MaxTicketSize != ChunkSize*MaxChunks {
 		t.Fatalf("MaxTicketSize=%d, want ChunkSize*MaxChunks=%d", MaxTicketSize, ChunkSize*MaxChunks)
+	}
+}
+
+// TestTryGetSession_LegacyTicketBackfillsAndPersistsStamp is the storage half of
+// the legacy-ticket fix. A ticket sealed before the lifetime bounds existed carries
+// no session_created_at, so TryGetSession backfills one - but the backfill is
+// in-memory only and reaches the browser when the ticket is re-sealed. Re-sealing
+// must persist the stamp rather than let it restart from zero, otherwise
+// maxSessionLifetimeSeconds never fires for a pre-upgrade session.
+func TestTryGetSession_LegacyTicketBackfillsAndPersistsStamp(t *testing.T) {
+	storage := CreateCookieSessionStorage()
+	cfg := storageTestConfig()
+	logger := storageTestLogger()
+
+	// Sealed with the purpose-less helper, exactly like a ticket written before
+	// purpose binding existed, and with neither lifetime timestamp present.
+	legacyJson, err := json.Marshal(map[string]interface{}{
+		"id":               "legacy-session",
+		"access_token":     "opaque-access-token-value",
+		"is_authorized":    true,
+		"token_expires_in": 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyTicket, err := utils.Encrypt(string(legacyJson), cfg.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backfilled, err := storage.TryGetSession(logger, cfg, legacyTicket)
+	if err != nil {
+		t.Fatalf("a pre-upgrade ticket must still be accepted: %v", err)
+	}
+	if backfilled.CreatedAt.IsZero() {
+		t.Fatal("the missing session_created_at must be backfilled, not left zero")
+	}
+
+	// The re-seal the middleware performs on the first authenticated request.
+	resealed, err := storage.StoreSession(logger, cfg, backfilled.Id, backfilled)
+	if err != nil {
+		t.Fatalf("StoreSession: %v", err)
+	}
+
+	durable, err := storage.TryGetSession(logger, cfg, resealed)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if durable.CreatedAt.IsZero() {
+		t.Fatal("the backfilled stamp was discarded instead of persisted")
+	}
+	if !durable.CreatedAt.Equal(backfilled.CreatedAt.Truncate(time.Millisecond)) &&
+		!durable.CreatedAt.Equal(backfilled.CreatedAt) {
+		t.Fatalf("CreatedAt restarted on re-seal: %s -> %s",
+			backfilled.CreatedAt.Format(time.RFC3339Nano), durable.CreatedAt.Format(time.RFC3339Nano))
+	}
+
+	// And it must not restart again on a later re-seal: StoreSession only stamps a
+	// zero CreatedAt.
+	later, err := storage.StoreSession(logger, cfg, durable.Id, durable)
+	if err != nil {
+		t.Fatalf("second StoreSession: %v", err)
+	}
+	again, err := storage.TryGetSession(logger, cfg, later)
+	if err != nil {
+		t.Fatalf("second re-read: %v", err)
+	}
+	if !again.CreatedAt.Equal(durable.CreatedAt) {
+		t.Fatalf("CreatedAt restarted on a later re-seal: %s -> %s",
+			durable.CreatedAt.Format(time.RFC3339Nano), again.CreatedAt.Format(time.RFC3339Nano))
 	}
 }

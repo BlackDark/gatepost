@@ -1,4 +1,9 @@
 name: E2E Tests
+# website/** is skipped because a docs change cannot break the auth behaviour
+# these tests exercise (the only website-driven e2e surface is links, which the
+# `bun run build` in .github/workflows/lint.yml gates - onBrokenLinks is 'throw').
+# Dropping that paths-ignore would buy nothing but ~60min of Playwright per
+# docs typo.
 on:
   push:
     branches: [ main ]

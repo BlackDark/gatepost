@@ -54,7 +54,7 @@ The important things here are:
 3. The last router matches everything else and is bypassing the middleware, simply by not using it.
 
 :::tip
-Everything the plugin does - including which audience is accepted, which claims are asserted, and how long a session may live - is configured on the **middleware**, not on the router. To vary any of it for a single route, declare a second middleware with its own configuration (and its own `cookieNamePrefix`) and attach that one to the route. See [Per-route audience](./middleware-configuration.md#per-route-audience).
+Everything the plugin does - including which audience is accepted, which claims are asserted, and how long a session may live - is configured on the **middleware**, not on the router. To vary any of it for a single route, declare a second middleware with its own configuration (and its own `cookieNamePrefix`) and attach that one to the route. See [Per-route audience](../getting-started/middleware-configuration.md#per-route-audience).
 :::
 
 :::tip

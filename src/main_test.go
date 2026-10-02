@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -339,40 +340,71 @@ func TestHandleCallback_ExpiredStateIsCleanClientError(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_StaleAuthTimeFailsClosed is item 8b: the returned ID token
-// must carry a recent auth_time when max_auth_age_seconds is configured.
+// TestHandleCallback_StaleAuthTimeFailsClosed is item 8b: a step-up CHALLENGE must
+// come back from an authentication that is actually fresh when
+// provider.max_auth_age_seconds is configured, and must fail closed (no session)
+// when auth_time is stale or absent.
+//
+// The isChallenge dimension is load-bearing. max_age is only ever SENT to the IdP on
+// a challenge request (authParamsForChallenge), so requiring a fresh auth_time on a
+// plain login is unsatisfiable by construction - and with verification_token:
+// Introspection the claims carry no auth_time at all, so enforcing it there locked
+// every user out of every route once the option was switched on. The original version
+// of this test asserted that lockout as correct behaviour; its premise was wrong and
+// the plain-login rows below now pin the fixed contract instead.
 func TestHandleCallback_StaleAuthTimeFailsClosed(t *testing.T) {
 	cases := []struct {
 		name           string
 		maxAge         int
+		isChallenge    bool
 		claims         map[string]interface{}
 		wantCode       int
 		wantSessionSet bool
 	}{
 		{
-			name:           "stale_auth_time",
+			name:           "challenge_stale_auth_time_denied",
 			maxAge:         600,
+			isChallenge:    true,
 			claims:         map[string]interface{}{"sub": "user-1", "auth_time": float64(time.Now().Add(-2 * time.Hour).Unix())},
 			wantCode:       http.StatusForbidden,
 			wantSessionSet: false,
 		},
 		{
-			name:           "missing_auth_time",
+			name:           "challenge_missing_auth_time_denied",
 			maxAge:         600,
+			isChallenge:    true,
 			claims:         map[string]interface{}{"sub": "user-1"},
 			wantCode:       http.StatusForbidden,
 			wantSessionSet: false,
 		},
 		{
-			name:           "fresh_auth_time",
+			name:           "challenge_fresh_auth_time_accepted",
 			maxAge:         600,
+			isChallenge:    true,
 			claims:         map[string]interface{}{"sub": "user-1", "auth_time": float64(time.Now().Unix())},
+			wantCode:       http.StatusFound,
+			wantSessionSet: true,
+		},
+		{
+			name:           "plain_login_stale_auth_time_still_succeeds",
+			maxAge:         600,
+			isChallenge:    false,
+			claims:         map[string]interface{}{"sub": "user-1", "auth_time": float64(time.Now().Add(-2 * time.Hour).Unix())},
+			wantCode:       http.StatusFound,
+			wantSessionSet: true,
+		},
+		{
+			name:           "plain_login_missing_auth_time_still_succeeds",
+			maxAge:         600,
+			isChallenge:    false,
+			claims:         map[string]interface{}{"sub": "user-1"},
 			wantCode:       http.StatusFound,
 			wantSessionSet: true,
 		},
 		{
 			name:           "feature_disabled_ignores_auth_time",
 			maxAge:         0,
+			isChallenge:    true,
 			claims:         map[string]interface{}{"sub": "user-1"},
 			wantCode:       http.StatusFound,
 			wantSessionSet: true,
@@ -386,7 +418,7 @@ func TestHandleCallback_StaleAuthTimeFailsClosed(t *testing.T) {
 			h.toa.Config.Provider.MaxAuthAgeSeconds = tc.maxAge
 			h.claims = tc.claims
 
-			rw := h.do(t, &oidc.OidcState{Action: "Login", RedirectUrl: "https://app.example.com/"})
+			rw := h.do(t, &oidc.OidcState{Action: "Login", RedirectUrl: "https://app.example.com/", IsChallenge: tc.isChallenge})
 
 			if rw.Code != tc.wantCode {
 				t.Fatalf("status=%d want %d body=%q", rw.Code, tc.wantCode, rw.Body.String())
@@ -546,48 +578,184 @@ func TestForwardToUpstream_StripsInjectedIdentityHeaders(t *testing.T) {
 	}
 }
 
-// TestForwardToUpstream_ConfiguredHeaderIsSetNotInherited proves attachHeaders
-// runs on the public/forward path too, so a configured identity header is Set
-// (empty here, because there is no session) rather than inherited.
-func TestForwardToUpstream_ConfiguredHeaderIsSetNotInherited(t *testing.T) {
-	toa := newIdentityHeaderTestAuth(t)
-	toa.Config.UnauthenticatedBehavior = "Forward"
-	toa.Config.Headers = []config.HeaderConfig{
-		{Name: "X-Auth-Request-User", Value: "{{ .claims.sub }}", IncludeWhen: "Always"},
+// TestForwardToUpstream_NoTemplatedHeadersWithoutClaims pins the regression:
+// every path that reaches forwardToUpstream has no claims, and text/template
+// renders a nil-map field access as the literal string "<no value>". Setting
+// the header with that value is WORSE than leaving it unset: a backend that
+// treats the PRESENCE of an identity header as proof of authentication accepts an
+// unauthenticated caller. So on these paths no configured header may be set at
+// all, while the spoofable client-supplied ones must still be stripped.
+func TestForwardToUpstream_NoTemplatedHeadersWithoutClaims(t *testing.T) {
+	cases := []struct {
+		name     string
+		behavior string
+		// path selects which ServeHTTP branch is exercised.
+		path     string
+		withSess bool
+		// direct calls handleUnauthorized with a valid session instead of
+		// ServeHTTP. That is the only caller reaching the unauthorizedBehavior:
+		// Forward arm of forwardToUpstream with a session in hand and no claims.
+		direct bool
+	}{
+		{name: "bypass_rule", behavior: "Unauthorized", path: "/public", withSess: false},
+		{name: "unauthenticated_forward", behavior: "Forward", path: "/public", withSess: false},
+		{name: "unauthorized_forward_with_session", behavior: "Forward", path: "/private", withSess: true, direct: true},
 	}
 
-	var seen string
-	var hadHeader bool
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			toa, closeServer := newForwardPathTestAuth(t)
+			defer closeServer()
+
+			toa.Config.UnauthenticatedBehavior = tc.behavior
+			toa.Config.UnauthorizedBehavior = tc.behavior
+
+			condition, err := rules.ParseRequestCondition("Path(`/public`)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			toa.BypassAuthenticationRule = condition
+
+			var forwarded http.Header
+			toa.next = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				forwarded = r.Header.Clone()
+				w.WriteHeader(http.StatusOK)
+			})
+
+			rw := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "https://app.example.com"+tc.path, nil)
+			// The attacker supplies the well-known identity headers.
+			for _, name := range clientIdentityHeaders {
+				req.Header.Set(name, "attacker@example.com")
+			}
+			if tc.withSess {
+				req.Header.Set("Authorization", "Bearer good-token")
+			}
+
+			if tc.direct {
+				toa.handleUnauthorized(rw, req, &session.SessionState{
+					Id:          "AuthorizationHeader",
+					AccessToken: "good-token",
+				}, "")
+			} else {
+				toa.ServeHTTP(rw, req)
+			}
+
+			if rw.Code != http.StatusOK || forwarded == nil {
+				t.Fatalf("request was not forwarded: status=%d body=%q", rw.Code, rw.Body.String())
+			}
+
+			// No configured header may reach the backend on a claims-less path.
+			for _, header := range []string{"X-Auth-Request-User", "X-Forwarded-User", "X-App-Subject"} {
+				values, ok := forwarded[header]
+				if ok {
+					t.Fatalf("%s reached the backend on a path with no claims: %q (want absent)", header, values)
+				}
+			}
+
+			// Regression guard: the spoofable headers are still stripped.
+			for _, name := range clientIdentityHeaders {
+				if v := forwarded.Get(name); v != "" {
+					t.Fatalf("client-supplied %s reached the backend: %q", name, v)
+				}
+			}
+
+			// Grep-guard: nothing anywhere may carry the template's nil-map rendering.
+			for name, values := range forwarded {
+				for _, v := range values {
+					if strings.Contains(v, "<no value>") {
+						t.Fatalf("forwarded header %s carries the literal \"<no value>\": %q", name, v)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestServeHTTP_AuthenticatedPathStillSetsRenderedHeaders is the counterpart:
+// the authenticated path must keep attaching configured headers with the real
+// claim values, and must overwrite a client-supplied value rather than inherit it.
+func TestServeHTTP_AuthenticatedPathStillSetsRenderedHeaders(t *testing.T) {
+	toa, closeServer := newForwardPathTestAuth(t)
+	defer closeServer()
+
+	toa.Config.UnauthenticatedBehavior = "Unauthorized"
+	toa.Config.UnauthorizedBehavior = "Unauthorized"
+	toa.Config.Authorization = &config.AuthorizationConfig{}
+	toa.Config.Headers = []config.HeaderConfig{
+		{Name: "X-Auth-Request-User", Value: "{{ .claims.sub }}", IncludeWhen: "Always"},
+		{Name: "X-App-Subject", Value: "app-for-{{ .claims.sub }}", IncludeWhen: "Always"},
+	}
+
+	var forwarded http.Header
 	toa.next = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		values, ok := r.Header["X-Auth-Request-User"]
-		hadHeader = ok
-		if len(values) > 0 {
-			seen = values[0]
-		}
+		forwarded = r.Header.Clone()
 		w.WriteHeader(http.StatusOK)
 	})
 
 	rw := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/public", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/private", nil)
+	req.Header.Set("Authorization", "Bearer good-token")
 	req.Header.Set("X-Auth-Request-User", "attacker@example.com")
 
 	toa.ServeHTTP(rw, req)
 
-	if rw.Code != http.StatusOK {
-		t.Fatalf("status=%d", rw.Code)
+	if rw.Code != http.StatusOK || forwarded == nil {
+		t.Fatalf("authenticated request was not forwarded: status=%d body=%q", rw.Code, rw.Body.String())
 	}
-	if !hadHeader {
-		t.Fatal("configured header must be Set on the forward path, not merely deleted")
+	if got := forwarded.Get("X-Auth-Request-User"); got != "user-1" {
+		t.Fatalf("X-Auth-Request-User=%q, want the rendered claim value %q", got, "user-1")
 	}
-	if seen == "attacker@example.com" {
-		t.Fatal("injected value survived")
+	if got := forwarded.Get("X-App-Subject"); got != "app-for-user-1" {
+		t.Fatalf("X-App-Subject=%q, want %q", got, "app-for-user-1")
 	}
+}
+
+// newForwardPathTestAuth builds an instance whose IdP reports an active token
+// with claims {"sub": "user-1", "groups": ["users"]}. The session is presented
+// through AuthorizationHeader, which makes getSessionForRequest validate it on
+// every request, so the authenticated and the unauthorized-but-valid-session
+// branches are both reachable.
+func newForwardPathTestAuth(t *testing.T) (*TraefikOidcAuth, func()) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"active":true,"sub":"user-1","groups":["users"]}`))
+	}))
+
+	toa := newIdentityHeaderTestAuth(t)
+	toa.httpClient = server.Client()
+	toa.DiscoveryDocument = &oidc.OidcDiscovery{
+		AuthorizationEndpoint: server.URL + "/authorize",
+		IntrospectionEndpoint: server.URL + "/introspect",
+	}
+	toa.Config.Provider.TokenValidation = "Introspection"
+	toa.Config.AuthorizationHeader = &config.AuthorizationHeaderConfig{Name: "Authorization"}
+	// The user is valid but NOT an admin, so unauthorizedBehavior is exercised.
+	toa.Config.Authorization = &config.AuthorizationConfig{
+		AssertClaims: []config.ClaimAssertion{
+			{Name: "groups", AnyOf: []string{"admins"}},
+		},
+	}
+	toa.Config.Headers = []config.HeaderConfig{
+		{Name: "X-Auth-Request-User", Value: "{{ .claims.sub }}", IncludeWhen: "Always"},
+		{Name: "X-Forwarded-User", Value: "{{ .claims.sub }}", IncludeWhen: "Always"},
+		{Name: "X-App-Subject", Value: "{{ .claims.sub }}", IncludeWhen: "Always"},
+	}
+
+	return toa, server.Close
 }
 
 // TestForwardToUpstream_OrderSanitizeThenAttach pins the ordering the
 // authenticated path relies on: sanitize first, attach second. With the reverse
 // order the delete would wipe the header attachHeaders just set, or an
 // attacker-supplied value would survive.
+// TestForwardToUpstream_OrderSanitizeThenAttach pins the ordering the
+// authenticated path relies on: sanitize first, attach second. With the reverse
+// order the delete would wipe the header attachHeaders just set, or an
+// attacker-supplied value would survive. The authenticated path does this in
+// ServeHTTP; forwardToUpstream only sanitizes, because it has no claims to attach.
 func TestForwardToUpstream_OrderSanitizeThenAttach(t *testing.T) {
 	toa := newIdentityHeaderTestAuth(t)
 	toa.Config.Headers = []config.HeaderConfig{
@@ -687,6 +855,50 @@ func TestRedirectUriHonoursForwardedHeadersOnlyFromTrustedPeer(t *testing.T) {
 			remoteAddr:     "203.0.113.7:41234",
 			forwardedProto: "http",
 			wantRedirect:   "http://app.example.com/oidc/callback",
+		},
+		// Appending-proxy chain: the trusted proxy adds its own entry at the END, so
+		// the attacker-controlled leftmost entry must lose.
+		{
+			name:          "appending_chain_rightmost_host_wins",
+			trusted:       []string{"192.0.2.0/24"},
+			remoteAddr:    "192.0.2.10:41234",
+			forwardedHost: "evil.example, real.example",
+			wantRedirect:  "https://real.example/oidc/callback",
+		},
+		{
+			name:           "appending_chain_rightmost_proto_wins",
+			trusted:        []string{"192.0.2.0/24"},
+			remoteAddr:     "192.0.2.10:41234",
+			forwardedProto: "https, http",
+			wantRedirect:   "http://app.example.com/oidc/callback",
+		},
+		{
+			name:           "appending_chain_leftmost_proto_cannot_downgrade_to_javascript",
+			trusted:        []string{"192.0.2.0/24"},
+			remoteAddr:     "192.0.2.10:41234",
+			forwardedProto: "javascript, https",
+			wantRedirect:   "https://app.example.com/oidc/callback",
+		},
+		{
+			name:          "whitespace_only_rightmost_host_falls_back_to_request_host",
+			trusted:       []string{"192.0.2.0/24"},
+			remoteAddr:    "192.0.2.10:41234",
+			forwardedHost: "evil.example,   ",
+			wantRedirect:  "https://app.example.com/oidc/callback",
+		},
+		{
+			name:           "whitespace_only_rightmost_proto_falls_back_to_tls",
+			trusted:        []string{"192.0.2.0/24"},
+			remoteAddr:     "192.0.2.10:41234",
+			forwardedProto: "http,   ",
+			wantRedirect:   "https://app.example.com/oidc/callback",
+		},
+		{
+			name:          "untrusted_peer_multi_entry_chain_ignored_entirely",
+			trusted:       []string{"192.0.2.0/24"},
+			remoteAddr:    "203.0.113.7:41234",
+			forwardedHost: "evil.example, other.example",
+			wantRedirect:  "https://app.example.com/oidc/callback",
 		},
 	}
 
@@ -1326,5 +1538,305 @@ func TestPeerIP(t *testing.T) {
 				t.Fatalf("peerIP(%q)=%v want %s", tc.remoteAddr, got, tc.want)
 			}
 		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// FIX 3: a session that could not be sealed must stop the request
+// -----------------------------------------------------------------------------
+
+// countingResponseWriter records every WriteHeader call, so a test can prove the
+// 500 was written exactly once and nothing was appended to the committed response.
+type countingResponseWriter struct {
+	rec      *httptest.ResponseRecorder
+	statuses []int
+}
+
+func (c *countingResponseWriter) Header() http.Header { return c.rec.Header() }
+
+func (c *countingResponseWriter) WriteHeader(code int) {
+	c.statuses = append(c.statuses, code)
+	c.rec.WriteHeader(code)
+}
+
+func (c *countingResponseWriter) Write(b []byte) (int, error) { return c.rec.Write(b) }
+
+// failingSessionStorage seals nothing. Every store fails, which is what an
+// oversized session (ErrSessionTooLarge) looks like to the middleware.
+type failingSessionStorage struct {
+	err error
+}
+
+func (f *failingSessionStorage) StoreSession(*logging.Logger, *config.Config, string, *session.SessionState) (string, error) {
+	return "", f.err
+}
+
+func (f *failingSessionStorage) TryGetSession(*logging.Logger, *config.Config, string) (*session.SessionState, error) {
+	return nil, nil
+}
+
+// countingSessionStorage reads a fixed session, records how often it was stored, and
+// fails every store with err. It is what an oversized session (ErrSessionTooLarge)
+// looks like to the middleware.
+type countingSessionStorage struct {
+	state  *session.SessionState
+	stores int
+	err    error
+}
+
+func (c *countingSessionStorage) StoreSession(*logging.Logger, *config.Config, string, *session.SessionState) (string, error) {
+	c.stores++
+	if c.err != nil {
+		return "", c.err
+	}
+
+	return "unused-ticket", nil
+}
+
+func (c *countingSessionStorage) TryGetSession(*logging.Logger, *config.Config, string) (*session.SessionState, error) {
+	if c.state == nil {
+		return nil, nil
+	}
+
+	copied := *c.state
+	return &copied, nil
+}
+
+// TestServeHTTP_UnpersistableSessionIsNotForwarded is FIX 3: StoreSession used to
+// write a 500 and the caller carried on to the backend anyway - a superfluous
+// WriteHeader on a committed response, a truncated body spliced onto it, and a
+// request served for a session the plugin had just declared unpersistable.
+func TestServeHTTP_UnpersistableSessionIsNotForwarded(t *testing.T) {
+	cases := []struct {
+		name string
+		// idle / lifetime select which re-store trigger reaches
+		// storeSessionAndAttachCookie: the idle-bound refresh, the FIX 4 lifetime
+		// stamp, or neither (which must not reach the store at all).
+		idle     int
+		lifetime int
+		storeErr error
+	}{
+		{name: "store_fails_on_idle_refresh", idle: 900, storeErr: errors.New("store failed")},
+		{name: "oversized_session", idle: 900, storeErr: session.ErrSessionTooLarge},
+		{name: "oversized_session_on_lifetime_stamp", lifetime: 3600, storeErr: session.ErrSessionTooLarge},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := &countingSessionStorage{
+				err: tc.storeErr,
+				state: &session.SessionState{
+					Id:             "session-1",
+					AccessToken:    "opaque-access-token-value",
+					IdToken:        "opaque-id-token-value",
+					RefreshToken:   "refresh-token-value",
+					IsAuthorized:   true,
+					TokenExpiresIn: 3600,
+					RefreshedAt:    time.Now().UTC(),
+					CreatedAt:      time.Now().UTC(),
+					LastUsedAt:     time.Now().UTC(),
+				},
+			}
+
+			h := newCallbackHarness(t, "Introspection")
+			defer h.server.Close()
+			toa := h.toa
+			toa.Config.LoginUri = ""
+			toa.Config.LogoutUri = "/logout"
+			toa.Config.UnauthenticatedBehavior = "Unauthorized"
+			toa.Config.UnauthorizedBehavior = "Unauthorized"
+			toa.Config.SessionIdleTimeoutSeconds = tc.idle
+			toa.Config.MaxSessionLifetimeSeconds = tc.lifetime
+			// Keep the token well inside its renewal window, so the session is
+			// accepted without a renewal and the store is reached via the two bounds.
+			toa.Config.Provider.TokenRenewalThreshold = 0.9
+			toa.SessionStorage = storage
+			toa.httpClient = h.server.Client()
+
+			forwarded := false
+			toa.next = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				forwarded = true
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("backend body"))
+			})
+
+			rw := &countingResponseWriter{rec: httptest.NewRecorder()}
+			req := httptest.NewRequest(http.MethodGet, "https://app.example.com/", nil)
+			req.AddCookie(&http.Cookie{Name: getSessionCookieName(toa.Config), Value: "some-ticket"})
+
+			toa.ServeHTTP(rw, req)
+
+			if forwarded {
+				t.Fatal("a request whose session could not be sealed must never reach the backend")
+			}
+			if len(rw.statuses) != 1 {
+				t.Fatalf("response was written %d times (%v), want exactly one 500", len(rw.statuses), rw.statuses)
+			}
+			if rw.statuses[0] != http.StatusInternalServerError {
+				t.Fatalf("status=%d want 500", rw.statuses[0])
+			}
+			if strings.Contains(rw.rec.Body.String(), "backend body") {
+				t.Fatalf("a backend body was spliced onto the error response: %q", rw.rec.Body.String())
+			}
+			if tc.storeErr != nil && storage.stores == 0 {
+				t.Fatal("the store was never attempted, so this test proves nothing")
+			}
+		})
+	}
+}
+
+// TestEstablishSession_StoreFailureIsClean500 is the other half of FIX 3: the
+// callback path used to write a 500 and then fall through to http.Redirect, which
+// appends a second status and a Location header to a committed response.
+func TestEstablishSession_StoreFailureIsClean500(t *testing.T) {
+	h := newCallbackHarness(t, "Introspection")
+	defer h.server.Close()
+	h.toa.SessionStorage = &failingSessionStorage{err: session.ErrSessionTooLarge}
+
+	rw := &countingResponseWriter{rec: httptest.NewRecorder()}
+
+	sess, err := h.toa.establishSession(rw, &oidc.OidcTokenResponse{AccessToken: "a", IdToken: "b"}, map[string]interface{}{"sub": "user-1"}, &oidc.OidcState{})
+
+	if err == nil {
+		t.Fatal("establishSession must report a store failure")
+	}
+	if sess != nil {
+		t.Fatal("no session may be returned when it could not be sealed")
+	}
+	if len(rw.statuses) != 1 || rw.statuses[0] != http.StatusInternalServerError {
+		t.Fatalf("statuses=%v want exactly one 500", rw.statuses)
+	}
+	if loc := rw.rec.Header().Get("Location"); loc != "" {
+		t.Fatalf("a failed session store must not emit a redirect to %q", loc)
+	}
+	for _, c := range rw.rec.Result().Cookies() {
+		if c.Name == getSessionCookieName(h.toa.Config) && c.Value != "" {
+			t.Fatal("no session cookie may be emitted for a session that could not be sealed")
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// FIX 4: a legacy ticket has to get a durable CreatedAt
+// -----------------------------------------------------------------------------
+
+// TestSessionLifetimeStampDue pins the re-store trigger for a ticket that predates
+// the lifetime bounds. Without it, the CreatedAt that TryGetSession backfills is
+// discarded at the end of every request and maxSessionLifetimeSeconds only starts
+// counting at the first renewal.
+func TestSessionLifetimeStampDue(t *testing.T) {
+	cases := []struct {
+		name     string
+		lifetime int
+		want     bool
+	}{
+		{name: "lifetime_configured", lifetime: 3600, want: true},
+		{name: "lifetime_disabled_no_rewrite", lifetime: 0, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			toa := newAuthBehaviorTestAuth(t)
+			toa.Config.MaxSessionLifetimeSeconds = tc.lifetime
+
+			if got := toa.sessionLifetimeStampDue("session-1"); got != tc.want {
+				t.Fatalf("first call=%v want %v", got, tc.want)
+			}
+
+			// Once this process has written a ticket for the session, the stamp is
+			// durable and re-stamping must not happen again.
+			toa.sessionWrites.mark("session-1")
+			if got := toa.sessionLifetimeStampDue("session-1"); got {
+				t.Fatal("must not rewrite the ticket on every single request")
+			}
+
+			if toa.sessionLifetimeStampDue("AuthorizationHeader") || toa.sessionLifetimeStampDue("AuthorizationCookie") {
+				t.Fatal("must not mint a session cookie out of a header/cookie pseudo-session")
+			}
+		})
+	}
+}
+
+// TestLegacyTicket_GetsDurableCreatedAt is FIX 4 end to end: a purpose-less
+// (pre-upgrade) ticket carrying no session_created_at is read repeatedly with no
+// renewal, and the stamp has to end up persisted in the cookie and keep ageing
+// rather than restarting from zero on every request.
+func TestLegacyTicket_GetsDurableCreatedAt(t *testing.T) {
+	storage := session.CreateCookieSessionStorage()
+	cfg := &config.Config{Secret: "0123456789abcdef0123456789abcdef", CookieNamePrefix: "TraefikOidcAuth"}
+	logger := logging.CreateLogger(logging.LevelError)
+
+	// A ticket sealed before both purpose binding and the lifetime bounds: no
+	// session_created_at, no last_used_at.
+	legacyJson, err := json.Marshal(map[string]interface{}{
+		"id":               "legacy-session",
+		"access_token":     "opaque-access-token-value",
+		"id_token":         "opaque-id-token-value",
+		"refresh_token":    "refresh-token-value",
+		"is_authorized":    true,
+		"token_expires_in": 3600,
+		"created_at":       time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyTicket, err := utils.Encrypt(string(legacyJson), cfg.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toa := &TraefikOidcAuth{Config: cfg, logger: logger}
+	toa.Config.MaxSessionLifetimeSeconds = 3600
+	toa.Config.SessionIdleTimeoutSeconds = 0
+
+	ticket := legacyTicket
+	var firstStamp time.Time
+
+	// Simulate consecutive requests that never renew the session.
+	for request := 0; request < 3; request++ {
+		state, err := storage.TryGetSession(logger, cfg, ticket)
+		if err != nil {
+			t.Fatalf("request %d: TryGetSession: %v", request, err)
+		}
+		if state.CreatedAt.IsZero() {
+			t.Fatalf("request %d: the legacy ticket was not backfilled", request)
+		}
+
+		// The middleware's own decision, so the two halves of the fix cannot drift.
+		if toa.sessionStoreDue(state.Id, false) {
+			stored, err := storage.StoreSession(logger, cfg, state.Id, state)
+			if err != nil {
+				t.Fatalf("request %d: StoreSession: %v", request, err)
+			}
+			toa.sessionWrites.mark(state.Id)
+			ticket = stored
+		} else if request == 0 {
+			t.Fatal("the first request on a legacy ticket must re-seal it")
+		}
+
+		// Read the durable ticket back, not the in-memory state.
+		durable, err := storage.TryGetSession(logger, cfg, ticket)
+		if err != nil {
+			t.Fatalf("request %d: re-read: %v", request, err)
+		}
+		if durable.CreatedAt.IsZero() {
+			t.Fatalf("request %d: the backfilled CreatedAt was never persisted", request)
+		}
+		if request == 0 {
+			firstStamp = durable.CreatedAt
+			continue
+		}
+		if !durable.CreatedAt.Equal(firstStamp) {
+			t.Fatalf("request %d: CreatedAt restarted (%s -> %s); the absolute bound is unbounded again",
+				request, firstStamp.Format(time.RFC3339Nano), durable.CreatedAt.Format(time.RFC3339Nano))
+		}
+	}
+
+	// The bound is now real: an aged durable ticket is refused rather than accepted
+	// forever.
+	aged := firstStamp.Add(-2 * time.Hour)
+	toa.Config.MaxSessionLifetimeSeconds = 3600
+	if err := checkSessionBounds(toa, &session.SessionState{Id: "legacy-session", CreatedAt: aged, LastUsedAt: time.Now().UTC()}); !errors.Is(err, errSessionExpired) {
+		t.Fatalf("an aged legacy session must be refused, got %v", err)
 	}
 }
