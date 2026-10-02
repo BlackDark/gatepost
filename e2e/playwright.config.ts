@@ -19,8 +19,8 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
     {
-      name: 'keycloak',
-      testDir: './tests/keycloak',
+      name: 'mock-oidc-tls',
+      testDir: './tests/mock-oidc-tls',
       testMatch: /tls\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },

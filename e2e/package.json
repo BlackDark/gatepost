@@ -4,9 +4,9 @@
   "main": "index.js",
   "scripts": {
     "prepare": "cd tests/mock-oidc && docker compose pull",
-    "prepare:keycloak": "cd tests/keycloak && ./gencerts.sh && docker compose pull",
+    "prepare:tls": "cd tests/mock-oidc-tls && ./gencerts.sh && docker compose pull",
     "test": "playwright test --project=mock-oidc",
-    "test:keycloak": "playwright test --project=keycloak",
+    "test:tls": "playwright test --project=mock-oidc-tls",
     "test:all": "playwright test",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

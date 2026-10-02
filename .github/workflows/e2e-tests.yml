@@ -59,9 +59,37 @@ jobs:
         run: bunx playwright install --with-deps chromium
 
       - name: Run Playwright tests
-        run: bunx playwright test --project=mock-oidc
+        run: |
+          set -o pipefail
+          bunx playwright test --project=mock-oidc 2>&1 | tee /tmp/pw.log
         env:
           CI: true
+
+      # Job logs can only be fetched with admin rights, and the step log is
+      # truncated, so a red run has historically been undiagnosable from outside.
+      # GitHub turns ::error:: lines into check annotations, which ARE readable
+      # from the public API, so publish the useful part of a failure there.
+      # Deliberately last so it also covers a beforeAll that never ran.
+      - name: Publish failure detail as annotations
+        if: ${{ failure() }}
+        run: |
+          set -uo pipefail
+          emit() {
+            # Workflow commands are line delimited and treat % and CR as
+            # escapes, so neutralise both before emitting.
+            printf '%s\n' "$1" | tr -d '\r' | sed 's/%/%25/g' | head -c 900 |
+              sed 's/^/::error::/'
+          }
+          if [ ! -f /tmp/pw.log ]; then
+            emit "Playwright produced no output: the failure was before the test runner (fixture, compose up, or image build)."
+            exit 0
+          fi
+          emit "=== failed test names ==="
+          grep -E '^[[:space:]]+[0-9]+\) ' /tmp/pw.log | head -25 | while IFS= read -r l; do emit "$l"; done
+          emit "=== playwright summary ==="
+          grep -E '^[[:space:]]+[0-9]+ (failed|passed|flaky|skipped|did not run)' /tmp/pw.log | head -10 | while IFS= read -r l; do emit "$l"; done
+          emit "=== error headlines ==="
+          grep -E 'Error:|Timed out|expect\(|received:|Expected' /tmp/pw.log | head -25 | while IFS= read -r l; do emit "$l"; done
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -71,20 +99,19 @@ jobs:
           path: ./e2e/playwright-report/
           retention-days: 30
 
-  test-keycloak:
-    name: E2E tests (keycloak)
-    # A cold `keycloak start-dev --import-realm` gets a 420s compose wait plus a
-    # 180s readiness wait, and Playwright retries the whole file once in CI -
-    # which re-runs beforeAll, so the worst case is two full fixture startups.
-    # 60min was too tight for that; 75 is generous but still bounded.
-    timeout-minutes: 75
+  # Custom-CA trust for the plugin's server-to-server TLS client to the IdP
+  # (provider.cABundle / cABundleFile). This replaces the keycloak job that used
+  # to cover it: that stack needed a postgres sidecar, a realm import and a
+  # two-level 4096-bit CA chain, took minutes to boot, was red on main for a
+  # long time, and was gated behind workflow_dispatch/main so it gave no PR
+  # signal. The TLS mock-oauth2-server variant boots in ~3s and covers the same
+  # code path, so it can run on every pull request - which is what this coverage
+  # actually needed. 20 minutes is generous for a ~1s cert generation plus a
+  # 9-test file against one container stack.
+  test-tls:
+    name: E2E tests (TLS)
+    timeout-minutes: 20
     runs-on: ubuntu-latest
-    # The keycloak project is the only coverage of the provider cABundle /
-    # cABundleFile custom-CA path, so it must not stay unrun. It needs a
-    # generated throwaway CA plus a privileged keycloak container, which makes
-    # it too slow and too environment-sensitive to gate every PR: run it on
-    # main and on demand instead, and rely on the mock-oidc job for PR signal.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
     defaults:
@@ -108,41 +135,67 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Generates the throwaway CA that the custom-CA trust tests need and pulls
-      # the keycloak images; not the mock-oidc `prepare` script.
+      # Generates the throwaway CA the custom-CA trust tests need and pulls the
+      # mock-oauth2-server image; not the mock-oidc `prepare` script.
       - name: Prepare tests
-        run: bun run prepare:keycloak
+        run: bun run prepare:tls
 
       - name: Install Playwright Browsers
         run: bunx playwright install --with-deps chromium
 
       - name: Run Playwright tests
         id: playwright
-        run: bunx playwright test --project=keycloak
+        run: |
+          set -o pipefail
+          bunx playwright test --project=mock-oidc-tls 2>&1 | tee /tmp/pw.log
         env:
           CI: true
 
-      # The spec's afterEach dumps traefik + keycloak logs, but afterEach does
-      # NOT run when beforeAll itself fails (compose never came up, or the
-      # readiness wait timed out) - which is exactly the failure this job is
-      # most likely to hit. This step covers that gap so a future red run is
-      # diagnosable from the log alone, without admin access to job logs.
+      # Job logs can only be fetched with admin rights, and the step log is
+      # truncated, so a red run has historically been undiagnosable from outside.
+      # GitHub turns ::error:: lines into check annotations, which ARE readable
+      # from the public API, so publish the useful part of a failure there.
+      # Deliberately last so it also covers a beforeAll that never ran.
+      - name: Publish failure detail as annotations
+        if: ${{ failure() }}
+        run: |
+          set -uo pipefail
+          emit() {
+            # Workflow commands are line delimited and treat % and CR as
+            # escapes, so neutralise both before emitting.
+            printf '%s\n' "$1" | tr -d '\r' | sed 's/%/%25/g' | head -c 900 |
+              sed 's/^/::error::/'
+          }
+          if [ ! -f /tmp/pw.log ]; then
+            emit "Playwright produced no output: the failure was before the test runner (fixture, compose up, or image build)."
+            exit 0
+          fi
+          emit "=== failed test names ==="
+          grep -E '^[[:space:]]+[0-9]+\) ' /tmp/pw.log | head -25 | while IFS= read -r l; do emit "$l"; done
+          emit "=== playwright summary ==="
+          grep -E '^[[:space:]]+[0-9]+ (failed|passed|flaky|skipped|did not run)' /tmp/pw.log | head -10 | while IFS= read -r l; do emit "$l"; done
+          emit "=== error headlines ==="
+          grep -E 'Error:|Timed out|expect\(|received:|Expected' /tmp/pw.log | head -25 | while IFS= read -r l; do emit "$l"; done
+
+      # The spec's afterEach dumps traefik + mock logs, but afterEach does NOT
+      # run when beforeAll itself fails (compose never came up) - which is
+      # exactly the failure this job is most likely to hit. This step covers that
+      # gap so a future red run is diagnosable from the log alone, without admin
+      # access to job logs.
       - name: Dump compose state on failure
         if: ${{ failure() && steps.playwright.outcome == 'failure' }}
         run: |
           echo "===== docker compose ps -a ====="
-          docker compose -f tests/keycloak/docker-compose.yml ps -a || true
-          echo "===== keycloak logs (tail 200) ====="
-          docker compose -f tests/keycloak/docker-compose.yml logs --no-color --tail 200 keycloak || true
-          echo "===== keycloak_postgres logs (tail 100) ====="
-          docker compose -f tests/keycloak/docker-compose.yml logs --no-color --tail 100 keycloak_postgres || true
+          docker compose -f tests/mock-oidc-tls/docker-compose.yml ps -a || true
+          echo "===== mock-oauth2-server logs (tail 200) ====="
+          docker compose -f tests/mock-oidc-tls/docker-compose.yml logs --no-color --tail 200 mock-oauth2-server || true
           echo "===== traefik logs (tail 200) ====="
-          docker compose -f tests/keycloak/docker-compose.yml logs --no-color --tail 200 traefik || true
+          docker compose -f tests/mock-oidc-tls/docker-compose.yml logs --no-color --tail 200 traefik || true
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ !cancelled() }}
         with:
-          name: playwright-report-keycloak
+          name: playwright-report-tls
           path: ./e2e/playwright-report/
           retention-days: 30

@@ -22,10 +22,9 @@ workspaces/
 bin/
 cmd/extauth-server/extauth-server
 
-# Local review/e2e scratch space: e2e/tests/keycloak/certificates holds a
+# Local review/e2e scratch space: e2e/tests/mock-oidc-tls/certificates holds a
 # generated throwaway CA private key, playwright-report holds run artifacts.
-e2e/tests/keycloak/certificates/
-e2e/tests/keycloak/data/
+e2e/tests/mock-oidc-tls/certificates/
 e2e/playwright-report/
 e2e/test-results/
 

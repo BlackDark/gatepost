@@ -48,8 +48,34 @@ async function fileOidcPrefixes(): Promise<string[] | null> {
     .map((m) => m.plugin?.['traefik-oidc-auth']?.CookieNamePrefix ?? '');
 }
 
-export async function configureTraefik(yaml: string) {
-  const filePath = path.join(__dirname, '.http.yml');
+export async function configureTraefik(
+  yaml: string,
+  opts?: {
+    /**
+     * Filename written under e2e/. Defaults to ".http.yml" so the original
+     * mock-oidc suite is untouched.
+     *
+     * A second suite (mock-oidc-tls) MUST pass its own filename. Every write
+     * stamps a fresh CookieNamePrefix and both suites bind-mount their file to
+     * the same in-container path, so a shared fixed name means one Playwright
+     * project's beforeAll/test overwrites the other project's Traefik config
+     * mid-run — which fails as a mystery "router not found" rather than as the
+     * obvious file collision it is.
+     */
+    file?: string;
+    /**
+     * Set false to skip the wait-for-apply loop entirely (default true).
+     *
+     * The loop throws "Traefik config not ready" once the deadline passes,
+     * which is correct for a config Traefik is expected to accept. It is
+     * actively wrong for the negative cases: a config the plugin rejects in
+     * New() is NEVER applied, so the wait can only ever time out and bury the
+     * real signal (the plugin's own error log) under an unrelated failure.
+     */
+    wait?: boolean;
+  },
+) {
+  const filePath = path.join(__dirname, opts?.file ?? '.http.yml');
   const marker = `e2e${Date.now()}`;
   const stamped = yaml.replace(
     /traefik-oidc-auth:/g,
@@ -57,6 +83,10 @@ export async function configureTraefik(yaml: string) {
   );
   const expectedRouters = routerNamesFromYaml(stamped).sort();
   fs.writeFileSync(filePath, stamped);
+
+  if (opts?.wait === false) {
+    return;
+  }
 
   // beforeAll writes config before Traefik is up — nothing to wait on.
   if ((await fileRouterNames()) === null) {

@@ -1,0 +1,73 @@
+{
+  "interactiveLogin": true,
+  "loginPagePath": "/app/login.html",
+  "httpServer": "NettyWrapper",
+  "tokenCallbacks": [
+    {
+      "issuerId": "default",
+      "tokenExpiry": 3600,
+      "requestMappings": [
+        {
+          "requestParam": "subject",
+          "match": "admin",
+          "claims": {
+            "sub": "admin",
+            "preferred_username": "admin",
+            "email": "admin",
+            "aud": ["traefik"]
+          }
+        },
+        {
+          "requestParam": "subject",
+          "match": "alice@example.com",
+          "claims": {
+            "sub": "alice",
+            "preferred_username": "alice",
+            "email": "alice@example.com",
+            "aud": ["traefik"]
+          }
+        },
+        {
+          "requestParam": "subject",
+          "match": "bob@example.com",
+          "claims": {
+            "sub": "bob",
+            "preferred_username": "bob",
+            "email": "bob@example.com",
+            "aud": ["traefik"]
+          }
+        },
+        {
+          "requestParam": "username",
+          "match": "admin",
+          "claims": {
+            "sub": "admin",
+            "preferred_username": "admin",
+            "email": "admin",
+            "aud": ["traefik"]
+          }
+        },
+        {
+          "requestParam": "username",
+          "match": "alice@example.com",
+          "claims": {
+            "sub": "alice",
+            "preferred_username": "alice",
+            "email": "alice@example.com",
+            "aud": ["traefik"]
+          }
+        },
+        {
+          "requestParam": "username",
+          "match": "bob@example.com",
+          "claims": {
+            "sub": "bob",
+            "preferred_username": "bob",
+            "email": "bob@example.com",
+            "aud": ["traefik"]
+          }
+        }
+      ]
+    }
+  ]
+}

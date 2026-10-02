@@ -19,6 +19,35 @@ function baseMiddleware(extra = ''): string {
 ${extra}`;
 }
 
+/**
+ * A second plugin instance with usePkce on.
+ *
+ * Everything else about the e2e suite runs with usePkce: false, so before this
+ * the PKCE code path had no end-to-end coverage anywhere in the repo.
+ * It gets its OWN config, written by the single test that uses it, with its own
+ * callback path so it cannot compete with the shared routers for traffic.
+ *
+ * It must NOT be added to the beforeAll config. A router matching
+ * /oidc/callback outranks the shared PathPrefix(/) whoami router by Traefik's
+ * default rule-length priority, so a shared PKCE callback router silently
+ * captures the callback of EVERY test in this file - each of which started its
+ * flow on the usePkce:false instance - and every login then lands on a
+ * middleware holding no sealed state for it. That failure reads like an IdP or
+ * network fault rather than a routing collision, which is why it must not be
+ * reintroduced here.
+ */
+function pkceMiddleware(): string {
+  return `
+        traefik-oidc-auth:
+          logLevel: DEBUG
+          secret: "${PLUGIN_SECRET}"
+          provider:
+            url: "\${PROVIDER_URL}"
+            clientId: "\${CLIENT_ID}"
+            clientSecret: "\${CLIENT_SECRET}"
+            usePkce: true`;
+}
+
 function whoamiService(): string {
   return `
   services:
@@ -61,7 +90,18 @@ ${whoamiService()}
       plugin:
 ${baseMiddleware()}
 
-${whoamiRouter()}
+  routers:
+    whoami:
+      entryPoints: ["web"]
+      rule: "PathPrefix(\`/\`)"
+      service: whoami
+      middlewares: ["oidc-auth@file"]
+    whoami-secure:
+      entryPoints: ["websecure"]
+      tls: {}
+      rule: "PathPrefix(\`/\`)"
+      service: whoami
+      middlewares: ["oidc-auth@file"]
 `);
 
   await dockerCompose.upAll({
@@ -619,6 +659,51 @@ ${baseMiddleware(`
     [403],
   );
   expect(challenged.status()).toBe(403);
+});
+
+test('PKCE login through a dedicated usePkce router', async ({ page }) => {
+  // Writes its own complete config rather than reusing the beforeAll one. It
+  // must be complete: the shared config's routers stay as they are, and this
+  // one replaces them for as long as the test runs.
+  await configureTraefik(`
+http:
+${whoamiService()}
+
+  middlewares:
+    oidc-auth-pkce:
+      plugin:
+${pkceMiddleware()}
+
+  routers:
+    oidc-callback-pkce:
+      entryPoints: ["web"]
+      rule: "PathPrefix(\`/oidc/callback\`)"
+      service: noop@internal
+      middlewares: ["oidc-auth-pkce@file"]
+    whoami-pkce:
+      entryPoints: ["web"]
+      rule: "PathPrefix(\`/pkce\`)"
+      service: whoami
+      middlewares: ["oidc-auth-pkce@file"]
+`);
+
+  // Proves the plugin's S256 round trip works against a real OIDC
+  // implementation: it sends code_challenge + code_challenge_method=S256 on the
+  // authorize leg, keeps the verifier, and replays it on the token leg, and the
+  // provider accepts the exchange.
+  //
+  // KNOWN LIMITATION, and the reason this test stops at a successful login:
+  // mock-oauth2-server does NOT require a PKCE verifier - a missing one is
+  // silently accepted and only a WRONG one is rejected. So a green run here
+  // proves the plugin's verifier is not wrong; it does NOT prove a provider
+  // would reject a PKCE downgrade (the plugin silently dropping the verifier).
+  // Do not read this as coverage of downgrade rejection - no e2e in this repo
+  // covers that, and adding a test that implied otherwise would be a false
+  // guarantee rather than a test.
+  await expectGotoOkay(page, 'http://localhost:9080/pkce');
+  const response = await login(page, 'admin', 'admin', 'http://localhost:9080/pkce');
+  expect(response.status()).toBe(200);
+  expect(await page.locator('text=Hostname:').isVisible()).toBeTruthy();
 });
 
 async function login(

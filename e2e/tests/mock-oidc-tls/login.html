@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mock OIDC Sign-in</title>
+  </head>
+  <body>
+    <form method="post" id="login-form">
+      <label>
+        Username
+        <input id="username" name="username" type="text" autofocus />
+      </label>
+      <label>
+        Password
+        <input id="password" name="password" type="password" />
+      </label>
+      <input id="claims" name="claims" type="hidden" value="" />
+      <button id="kc-login" type="submit">Sign in</button>
+    </form>
+    <script>
+      const claimMap = {
+        admin: {
+          sub: 'admin',
+          preferred_username: 'admin',
+          email: 'admin',
+          aud: ['traefik'],
+        },
+        'alice@example.com': {
+          sub: 'alice',
+          preferred_username: 'alice',
+          email: 'alice@example.com',
+          aud: ['traefik'],
+        },
+        'bob@example.com': {
+          sub: 'bob',
+          preferred_username: 'bob',
+          email: 'bob@example.com',
+          aud: ['traefik'],
+        },
+      };
+
+      document.getElementById('login-form').addEventListener('submit', () => {
+        const username = document.getElementById('username').value;
+        const claims = claimMap[username] || {
+          sub: username,
+          preferred_username: username,
+          email: username,
+          aud: ['traefik'],
+        };
+        document.getElementById('claims').value = JSON.stringify(claims);
+      });
+    </script>
+  </body>
+</html>
