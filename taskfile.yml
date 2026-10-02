@@ -54,14 +54,17 @@ tasks:
       - test:e2e
   test:unit:
     desc: 'Run all go unit tests'
-    dir: 'src'
     cmds:
-      - go test
+      # ./... is required: `go test` alone only builds the current package and
+      # silently skips src/oidc, src/utils and src/rules. -race because the
+      # middleware shares discovery/JWKS state behind locks; -count=1 because a
+      # cached pass is not evidence the tests still pass.
+      - go test -count=1 -race ./...
   test:extauth:
     desc: 'Run unit tests for the standalone ext-authz server'
     dir: 'cmd/extauth-server'
     cmds:
-      - go test ./...
+      - go test -count=1 -race ./...
   test:e2e:
     desc: 'Run all end to end tests'
     dir: 'e2e'
@@ -88,13 +91,15 @@ tasks:
   lint:sec:
     desc: 'Go vulnerability check (govulncheck)'
     cmds:
-      - go run golang.org/x/vuln/cmd/govulncheck@latest ./src/...
+      # Pinned to a released version: @latest makes the findings depend on when
+      # the command ran rather than on the commit.
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./src/...
       - task: lint:sec:extauth
   lint:sec:extauth:
     desc: 'Go vulnerability check for the standalone ext-authz server (separate Go module)'
     dir: 'cmd/extauth-server'
     cmds:
-      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
   lint:website:
     desc: 'Lint website with Biome'
     dir: 'website'

@@ -19,13 +19,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-push:
-    name: Build and push image
+  # Fast, fail-closed tag gate that runs BEFORE any build and BEFORE the
+  # `release` environment is touched. A mistyped tag (v1.2.3-rc1, v1.2.3+build,
+  # a branch name) triggers this workflow via `push: tags: ['v*']` or via
+  # workflow_dispatch; validating it only inside build-and-push meant the run
+  # queued on environment approval - burning a reviewer prompt on a release
+  # that was always going to be refused - and only failed after approval.
+  # No environment here on purpose: this job must never wait on a reviewer.
+  validate-tag:
+    name: Validate release tag
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # push image to GHCR
+    # Declared (not just implicit) so `needs.validate-tag.outputs.tag` type-checks
+    # under actionlint; the value is identical either way.
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
+      # Every publish path (release event, tag push, manual dispatch) converges
+      # on one tag. Resolution must happen before validation, so it lives here
+      # and its output is passed to build-and-push via `needs`.
       - name: Resolve tag
         id: resolve
         env:
@@ -49,11 +62,64 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      # The image below carries this fork's auth code. A tag that is not a plain
+      # semver release - or a manual run pointed at a branch - is refused here,
+      # before any build, before any push, and before any environment wait.
+      - name: Validate release tag
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release tag '$TAG' is not a plain semver release tag (expected ^v[0-9]+\.[0-9]+\.[0-9]+$, e.g. v0.22.0). Prerelease tags like v1.2.3-rc1 and branch refs such as main are refused: they would publish unreviewed code to :latest."
+            exit 1
+          fi
+          echo "release tag $TAG accepted"
+
+  build-and-push:
+    name: Build and push image
+    # Hard gate: nothing is built, no environment is entered, and no approval is
+    # requested unless validate-tag passed. Fail-closed by construction.
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    # Publishing an auth component needs a deliberate, auditable gate: the
+    # environment can hold required reviewers and deployment branch rules.
+    environment: release
+    permissions:
+      contents: read
+      packages: write # push image to GHCR
+    steps:
+      # Every publish path (release event, tag push, manual dispatch) converges
+      # on one tag, and the image below carries this fork's auth code. Both the
+      # resolution and the fail-closed validation happen in the validate-tag job
+      # above, which this job needs: an invalid tag fails before the `release`
+      # environment is ever entered.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ steps.resolve.outputs.tag }}
+          ref: ${{ needs.validate-tag.outputs.tag }}
+          # Full history so the tag itself is present locally and can be checked
+          # against HEAD; the shallow default would not create the tag ref.
+          fetch-depth: 0
           persist-credentials: false
+
+      # A branch can be named "v1.2.3" and a tag can be moved after approval,
+      # so the semver shape alone is not enough: refuse to publish unless the
+      # commit we just checked out is exactly the release tag.
+      - name: Verify checkout is the release tag
+        env:
+          TAG: ${{ needs.validate-tag.outputs.tag }}
+        run: |
+          if ! git tag --points-at HEAD | grep -qxF "$TAG"; then
+            echo "::error::checked out ref is not tagged $TAG - refusing to publish"
+            exit 1
+          fi
+
+      # The checkout ref is resolved from the tag, so github.sha is only the
+      # workflow-triggering commit and can differ (tag push vs. workflow_dispatch
+      # on another ref). Label the image with the commit actually built.
+      - name: Resolve built revision
+        id: rev
+        run: echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -68,7 +134,7 @@ jobs:
       - name: Compute image metadata
         id: meta
         env:
-          TAG: ${{ steps.resolve.outputs.tag }}
+          TAG: ${{ needs.validate-tag.outputs.tag }}
         run: |
           version="${TAG#v}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -86,5 +152,5 @@ jobs:
             ${{ steps.meta.outputs.image }}:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}

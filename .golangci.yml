@@ -29,12 +29,31 @@ linters:
   settings:
     gosec:
       # Intentional for this middleware; see SECURITY.md / New() hardening.
+      # Every ID below suppresses a REAL finding - verify that is still true
+      # before touching this list, because gosec ignores unknown IDs silently:
+      # an ID that no longer exists looks correct and suppresses nothing, while
+      # an ID deleted too eagerly re-opens a finding somebody reasoned about.
+      # To audit: delete one ID, run golangci-lint, and confirm the reported
+      # sites still match the comment written under it.
       excludes:
         - G101 # DefaultSecret sentinel refused at startup
         - G117 # Encrypted session cookie must carry tokens
-        - G124 # Cookie flags come from SessionCookie config
+        # G124 fires on src/cookie.go:128 and :289 and src/session.go:307. All
+        # three build their cookie through createSessionCookie /
+        # makeCookieExpireImmediately, which set Secure/HttpOnly/SameSite from
+        # the SessionCookie config; the flagged literal is a copy whose flags
+        # are applied by those helpers, so gosec cannot see them. Suppressed
+        # because fixing the code means weakening the cookie hardening this
+        # middleware depends on.
+        - G124
         - G402 # Provider.InsecureSkipVerify is explicit opt-in
-        - G710 # Post-login redirects gated by ValidPostLoginRedirectUris / state
+        # G710 fires on src/main.go:856 and :1175, both http.Redirect calls fed
+        # by redirectUrl. That value is only ever a target validated against
+        # ValidPostLoginRedirectUris, or the state-carried post-login URI from a
+        # validated callback; an attacker-controlled string never reaches it.
+        # Suppressing it is not a relaxation - the allow-list check is the
+        # control, and it lives outside these two lines.
+        - G710
     revive:
       rules:
         - name: blank-imports

@@ -1,3 +1,36 @@
+# The Dockerfile does `COPY . .`, so anything not excluded here ends up in an
+# image layer. That includes real IdP client secrets from local development
+# workspaces, so keep every local-only and secret-bearing path out.
+
+# VCS / CI metadata
 .git
-website/node_modules
-e2e/node_modules
+.github
+.gitignore
+
+# Local secrets: workspaces/*/.env holds real client secrets, client JWT keys
+# and cookies for every provider a maintainer tests against. `.env.example`
+# files are kept on purpose - they document the shape without the values.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local dev workspaces and their data (traefik state, generated keys, .env)
+workspaces/
+
+# Dependencies and build output
+**/node_modules
+bin/
+cmd/extauth-server/extauth-server
+
+# Local review/e2e scratch space: e2e/tests/keycloak/certificates holds a
+# generated throwaway CA private key, playwright-report holds run artifacts.
+e2e/tests/keycloak/certificates/
+e2e/tests/keycloak/data/
+e2e/playwright-report/
+e2e/test-results/
+
+# Docs and review notes are not needed to compile the binary
+docs/
+website/
+REVIEW.md
+CODE_OF_CONDUCT.md

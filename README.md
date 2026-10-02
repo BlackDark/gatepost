@@ -1,17 +1,17 @@
 # OIDC Auth: Traefik Middleware + Standalone ext_authz Service
 
-![E2E Tests](https://img.shields.io/github/actions/workflow/status/sevensolutions/traefik-oidc-auth/.github%2Fworkflows%2Fe2e-tests.yml?logo=github&label=E2E%20Tests&color=green)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/sevensolutions/traefik-oidc-auth/blob/main/LICENSE)
+[![E2E Tests](https://img.shields.io/github/actions/workflow/status/BlackDark/test-oidc-traefik-plugin/.github%2Fworkflows%2Fe2e-tests.yml?logo=github&label=E2E%20Tests&color=green)](https://github.com/BlackDark/test-oidc-traefik-plugin/actions/workflows/e2e-tests.yml)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/BlackDark/test-oidc-traefik-plugin/blob/main/LICENSE)
 
 <p align="left" style="text-align:left;">
-  <a href="https://github.com/sevensolutions/traefik-oidc-auth">
+  <a href="https://github.com/BlackDark/test-oidc-traefik-plugin">
     <img alt="Logo" src=".assets/icon.png" width="150" />
   </a>
 </p>
 
 This repo secures upstream services with OpenID Connect (acting as an OIDC relying party), in two forms sharing one core implementation:
 
-1. **Traefik middleware plugin** (`src/`) — the primary, mature component. A hardened fork of [sevensolutions/traefik-oidc-auth](https://github.com/sevensolutions/traefik-oidc-auth) (sealed OIDC state, PKCE-in-state, login CSRF, nonce, safer defaults — see `docs/adr/`). This is what Traefik's plugin catalog loads.
+1. **Traefik middleware plugin** (`src/`) — the primary, mature component. A hardened fork of [sevensolutions/traefik-oidc-auth](https://github.com/sevensolutions/traefik-oidc-auth) (sealed OIDC state, PKCE-in-state, login CSRF, nonce, safer defaults — see `docs/adr/` and the delta list under [📚 Documentation](#-documentation)). This is what Traefik's plugin catalog loads.
 2. **Standalone ext_authz service** (`cmd/extauth-server/`) — **experimental.** Exposes the same OIDC/session/authorization logic behind Envoy's `ext_authz` contract (HTTP and gRPC modes), so it can run behind any gateway that speaks that protocol — Envoy Gateway's `SecurityPolicy`, and in the future the standardized [Gateway API `ExternalAuth` filter (GEP-1494)](https://gateway-api.sigs.k8s.io/geps/gep-1494/) once an implementation actually supports it — not just Traefik. See [`docs/extauth-server.md`](docs/extauth-server.md) for usage, gateway compatibility, and a security review.
 
 Both share the same core packages (`src/oidc`, `src/session`, `src/rules`, `src/predicate`, `src/utils`) — one codebase, two transports, kept as one repo deliberately (see [ADR-0005](docs/adr/0005-standalone-ext-authz-service/) for why).
@@ -35,10 +35,10 @@ Used as a Traefik plugin (`import: github.com/BlackDark/test-oidc-traefik-plugin
 | Provider | Status | Notes |
 |---|---|---|
 | [ZITADEL](https://zitadel.com/) | ✅ | |
-| [Kanidm](https://github.com/kanidm/kanidm) | ✅ | See [GH-12](https://github.com/sevensolutions/traefik-oidc-auth/issues/12) |
+| [Kanidm](https://github.com/kanidm/kanidm) | ✅ | See upstream [GH-12](https://github.com/sevensolutions/traefik-oidc-auth/issues/12) |
 | [Keycloak](https://github.com/keycloak/keycloak) | ✅ | |
 | [Microsoft EntraID](https://learn.microsoft.com/de-de/entra/identity/) | ✅ | |
-| [HashiCorp Vault](https://www.vaultproject.io/) | ❌ | See [GH-13](https://github.com/sevensolutions/traefik-oidc-auth/issues/13) |
+| [HashiCorp Vault](https://www.vaultproject.io/) | ❌ | See upstream [GH-13](https://github.com/sevensolutions/traefik-oidc-auth/issues/13) |
 | [Authentik](https://goauthentik.io/) | ✅ | |
 | [Pocket ID](https://github.com/pocket-id/pocket-id) | ✅ | |
 | [GitHub](https://github.com) | ❌ | GitHub doesn't seem to support OIDC, only plain OAuth. |
@@ -46,7 +46,41 @@ Used as a Traefik plugin (`import: github.com/BlackDark/test-oidc-traefik-plugin
 
 ### 📚 Documentation
 
-The Traefik middleware's config reference and usage docs are built from the upstream project this fork is based on: [traefik-oidc-auth.sevensolutions.cc](https://traefik-oidc-auth.sevensolutions.cc/). Fields and behaviors added by this fork's hardening work are documented in [`docs/adr/`](docs/adr/) instead, since they diverge from upstream.
+The Traefik middleware's config reference and usage docs are built from the upstream project this fork is based on: [traefik-oidc-auth.sevensolutions.cc](https://traefik-oidc-auth.sevensolutions.cc/). **That site describes upstream, not this fork** — treat it as the baseline and assume no fork-local behaviour unless it is listed below. Fields and behaviors added by this fork's hardening work are documented in [`docs/adr/`](docs/adr/), since they diverge from upstream.
+
+### Fork hardening delta (not in upstream)
+
+These behaviours exist only in this fork. The upstream docs site will not mention them.
+
+| Behaviour | What it does | ADR |
+|---|---|---|
+| **Sealed OIDC `state`** | The whole `state` parameter is AES-GCM-sealed with the plugin secret, so its contents can be neither read nor forged by the browser. | [0002](docs/adr/0002-sealed-oidc-state/) |
+| **PKCE `code_verifier` in `state`** | The verifier rides encrypted inside the sealed `state` instead of a shared cookie, fixing verifier clobbering when parallel requests start parallel logins. | [0001](docs/adr/0001-pkce-verifier-in-oidc-state/) |
+| **Login CSRF cookie binding** | The login flow is bound to a CSRF cookie, so an attacker cannot force a victim's browser into an attacker-chosen authorization flow. | [0003](docs/adr/0003-login-csrf-binding/) |
+| **`nonce` validation** | ID tokens are required to carry and match the `nonce` sent on the authorize request. | [0004](docs/adr/0004-oidc-nonce/) |
+| **Redirect URI wildcards are opt-in** | Wildcard `redirectUri` templates are ignored entirely unless `TOA_ENABLE_REDIRECT_URI_WILDCARDS=true`. Once enabled, exact entries always match and wildcard templates get strict host/path matching plus spoofing and traversal guards. Callback re-validation uses the same matcher. | — (opt-in, defaults off) |
+| **`${file:/path}` secrets** | Any secret value may be loaded from a file at render time, keeping it out of the rendered Traefik configuration. | — |
+| **`secret` must be exactly 32 bytes** | A wrong-length `secret` is rejected at startup instead of silently weakening the sealed state. | [0002](docs/adr/0002-sealed-oidc-state/) |
+| **Purpose-bound sealing** | Session tickets and OIDC `state` are sealed with their purpose bound into the AEAD, so a ciphertext minted for one purpose cannot be read as the other. A narrow legacy fallback keeps pre-upgrade cookies working through a rolling upgrade. | [0002](docs/adr/0002-sealed-oidc-state/) |
+| **Expiring OIDC `state`** | The sealed `state` carries a signed 10-minute expiry, so a captured callback URL cannot be replayed indefinitely. A login left idle at the IDP for longer must be restarted. | [0002](docs/adr/0002-sealed-oidc-state/) |
+| **Bounded sessions** | `maxSessionLifetimeSeconds` and `sessionIdleTimeoutSeconds` give the only hard bounds a stateless session has. Both default to `0` (disabled), and an unbounded `maxSessionLifetimeSeconds` warns at startup. | — |
+| **Forwarded-header trust is opt-in** | `X-Forwarded-Proto` / `X-Forwarded-Host` are used when building absolute URLs — including the `redirect_uri` sent to the IDP — only from a peer listed in `trustedProxies`. Empty by default (trust nothing, fail-closed). **Behind an ingress you must set it or callbacks break.** | — |
+| **Request-supplied authorization params are pinned** | `authorizationParamsOverridable` (empty by default) decides which `authorizationParams` keys an incoming request may override via query parameter. Everything not listed keeps the operator's value, including `prompt`. | — |
+| **Real step-up authentication** | `provider.maxAuthAgeSeconds` enforces the freshness requirement on a **step-up challenge** (`unauthorizedBehavior: Challenge`): it sends `max_age` and requires a recent `auth_time` claim, so a stale IDP session cannot satisfy it. A plain login is unaffected. A missing `auth_time` fails closed — do not combine it with `provider.tokenValidation: Introspection`, whose RFC 7662 responses carry no `auth_time` at all. | — |
+| **Refresh-token revocation on logout** | `provider.revokeTokensOnLogout` (default `true`) revokes the session's refresh token at the IDP on logout, so a captured cookie cannot outlive it. Skipped when the IDP advertises no `revocation_endpoint`. | — |
+| **Bounded IDP calls** | `provider.oidcTimeoutSeconds` (default `30`) puts a client-side timeout on every outbound IDP call, so a hung IDP cannot pin a request goroutine or stall discovery/JWKS behind a lock. | — |
+| **Front-channel logout requires `sid` or `id_token_hint`** | A notification carrying only `iss` is rejected, because `iss` is the same for every user and accepting it alone would make forced-logout CSRF trivial. | — |
+
+Also fork-local and **breaking** since `v0.20.0`: `UnauthorizedBehavior` is split into `UnauthenticatedBehavior` (no credentials presented) and `UnauthorizedBehavior` (credentials presented but rejected). See [`CHANGELOG.md`](CHANGELOG.md).
+
+## Project status / versioning
+
+- This is a **fork** of [sevensolutions/traefik-oidc-auth](https://github.com/sevensolutions/traefik-oidc-auth), not a drop-in mirror of it. The two projects release independently and do not coordinate.
+- **Fork tags are independent of upstream tags.** A `v0.22.0` in this repository is a fork release with no upstream counterpart; an upstream tag of the same number may describe entirely different code. Never assume the two line up.
+- **Breaking changes are recorded in [`CHANGELOG.md`](CHANGELOG.md)** and marked explicitly with a **BREAKING CHANGE** note. Read it before upgrading across minor versions.
+- Security reports go through the private channels in [`SECURITY.md`](SECURITY.md) — not upstream's, and not a public issue.
+- `github.com/BlackDark/test-oidc-traefik-plugin` is a **placeholder** repo/module name pending a final organisation rename. If you depend on it, expect the import path to change; pin a specific version and re-check this section when you upgrade.
+- The standalone `ext_authz` service (`cmd/extauth-server`) remains **experimental** even though a release image is published from `v*` tags. A published image does not imply API stability.
 
 ## Standalone ext_authz service (experimental)
 

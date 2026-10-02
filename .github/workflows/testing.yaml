@@ -2,6 +2,13 @@ name: Run Go tests
 on:
   push:
     branches: [ main ]
+  # No paths filter here: a website-only change must still be gated by a build.
+  # website/** changes skip this workflow (they touch no Go code) but they DO run
+  # .github/workflows/lint.yml, whose website job runs `bun run build`. That
+  # build is load-bearing: docusaurus.config.ts sets onBrokenLinks: 'throw',
+  # so one bad relative link fails the whole site build. Removing the build step
+  # from lint.yml while keeping this paths-ignore would leave website PRs
+  # completely ungated - do not do that.
   pull_request:
     branches: [ main ]
     paths-ignore:
@@ -31,22 +38,156 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install dependencies
-        working-directory: ./src
-        run: go get .
+      # Deliberately no `go get`/`go mod download` step: the repo commits a
+      # vendor/ tree and .golangci.yml pins run.modules-download-mode: readonly,
+      # so a mutating dependency step would hide exactly the drift we want to see.
+      - name: Verify module integrity
+        run: |
+          go mod verify
+          git diff --exit-code -- go.mod go.sum vendor/
+
+      # The -C ../.. is what makes the pathspecs root-relative, so they must be
+      # spelled from the repository root. `git -C ../.. diff -- go.mod go.sum`
+      # (the previous form) named the ROOT module's files, which the step above
+      # had already checked, and therefore exited 0 even when this module's
+      # go.mod drifted - proven by mutation. Note git does NOT error on a
+      # pathspec that matches nothing, so a wrong path here fails open; the
+      # names below are the ones the module actually has.
+      - name: Verify module integrity (extauth-server)
+        working-directory: ./cmd/extauth-server
+        run: |
+          go mod verify
+          git -C ../.. diff --exit-code -- cmd/extauth-server/go.mod cmd/extauth-server/go.sum
 
       - name: Build
-        working-directory: ./src
-        run: go build
+        run: go build ./...
 
+      # ./... is load-bearing: without it `go test` only ever exercised the
+      # current-directory package and src/oidc, src/utils and src/rules were
+      # never compiled - which silently skipped the tamper-rejection suite.
+      # -race because the middleware guards shared discovery/JWKS state behind
+      # locks; -count=1 defeats the test cache so a green run is a real run.
       - name: Test with the Go CLI
-        working-directory: ./src
-        run: go test
+        run: go test -count=1 -race ./...
 
       - name: Build extauth-server
         working-directory: ./cmd/extauth-server
-        run: go build
+        run: go build ./...
 
       - name: Test extauth-server
         working-directory: ./cmd/extauth-server
-        run: go test
+        run: go test -count=1 -race ./...
+
+  docker:
+    name: extauth-server image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # The Dockerfile hand-rolls cross-compilation (TARGETARCH path mapping),
+      # so a plain `go build` in the Go job cannot tell us that the image still
+      # builds for both published platforms. Build both here, without pushing.
+      # `type=cacheonly` is required: the default output for a multi-platform
+      # build is the docker exporter, which cannot write a manifest list and
+      # fails the step. We want the build verified and nothing exported.
+      - name: Build image for all published platforms
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: cmd/extauth-server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          outputs: type=cacheonly
+
+      # A single-platform build can be loaded into the local docker image store,
+      # which gives us a runnable image for the smoke tests below.
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: cmd/extauth-server/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: extauth-server:ci
+
+      # There is no --help flag to smoke test against, so the two observable
+      # behaviours of the shipped artifact are: it refuses to come up without a
+      # usable config (fail closed - never serve unauthenticated by accident),
+      # and it comes up and reports its listener when given one.
+      - name: Smoke test - refuses to start without a config
+        run: |
+          set -euo pipefail
+          output="$(docker run --rm extauth-server:ci 2>&1)" && {
+            echo "::error::extauth-server started without a config file"
+            exit 1
+          }
+          echo "$output"
+          grep -q "config error" <<<"$output"
+
+      - name: Smoke test - starts and listens
+        run: |
+          set -euo pipefail
+          cfg="$(mktemp)"
+          cat >"$cfg" <<'JSON'
+          {
+            "secret": "0123456789abcdef0123456789abcdef",
+            "callback_uri": "/oidc/callback",
+            "provider": {
+              "url": "http://127.0.0.1:1/default",
+              "client_id": "traefik"
+            }
+          }
+          JSON
+          # The image runs as distroless "nonroot" (uid 65532). mktemp creates
+          # 0600 owned by the runner user, so without this the container cannot
+          # read its own config, exits immediately, and the poll below times out.
+          chmod 644 "$cfg"
+          container="$(docker run --rm -d \
+            -e LISTEN_ADDR=:9002 \
+            -e CONFIG_FILE=/tmp/config.json \
+            -v "$cfg:/tmp/config.json:ro" \
+            extauth-server:ci)"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            logs="$(docker logs "$container" 2>&1 || true)"
+            # Config keys must be the snake_case json tags, not Traefik's
+            # camelCase dynamic-config keys: loadConfig() decodes with
+            # encoding/json, so "clientId"/"callbackUri" are silently dropped
+            # and the process would start with an empty client id - a test
+            # asserting on that proves nothing about the real loader.
+            if grep -qiE "config error|init error" <<<"$logs"; then
+              echo "::error::extauth-server reported a config error"
+              echo "$logs"
+              exit 1
+            fi
+            if grep -q "listening on" <<<"$logs"; then
+              echo "extauth-server image booted and reported a listener"
+              exit 0
+            fi
+            # Fail fast instead of burning the full 30s when the process is
+            # already gone: that is always a real startup failure. --no-trunc is
+            # load-bearing - `docker ps --format '{{.ID}}'` prints 12-char IDs by
+            # default while `docker run -d` reports the full 64-char one, so the
+            # anchored `^...$` match could never fire and the loop always ran
+            # the full 30 seconds before reporting the same failure.
+            if ! docker ps --no-trunc --format '{{.ID}}' | grep -qxF "$container"; then
+              echo "::error::extauth-server exited before reporting a listener"
+              wait "$container" 2>/dev/null || true
+              docker logs "$container" 2>&1 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          # Diagnostics must never mask the real failure, so tolerate a
+          # container that already exited and was removed.
+          docker logs "$container" 2>&1 || true
+          echo "::error::extauth-server never reported a listening address"
+          exit 1

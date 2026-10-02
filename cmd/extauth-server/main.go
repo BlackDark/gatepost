@@ -134,11 +134,15 @@ func forwardedRequest(trustedProxies []*net.IPNet, next http.Handler) http.Handl
 			return
 		}
 
-		if host := req.Header.Get("X-Forwarded-Host"); host != "" {
+		// Each proxy in a chain appends its own entry, so the value added by the
+		// closest - and only trusted - hop is the RIGHTMOST one. Taking the
+		// leftmost would let a client-supplied value win. A proxy that replaces
+		// rather than appends emits a single entry, where the two agree.
+		if host := lastForwardedValue(req.Header.Get("X-Forwarded-Host")); host != "" {
 			req.Host = host
 			parsedURI.Host = host
 		}
-		if proto := req.Header.Get("X-Forwarded-Proto"); proto != "" {
+		if proto := lastForwardedValue(req.Header.Get("X-Forwarded-Proto")); proto != "" && validForwardedProto(proto) {
 			parsedURI.Scheme = proto
 		}
 
@@ -147,6 +151,29 @@ func forwardedRequest(trustedProxies []*net.IPNet, next http.Handler) http.Handl
 
 		next.ServeHTTP(rw, req)
 	})
+}
+
+// lastForwardedValue returns the rightmost entry of a possibly comma-separated
+// forwarded header value, trimmed of surrounding whitespace. It returns "" when
+// the value is empty or its rightmost entry is blank.
+func lastForwardedValue(value string) string {
+	if index := strings.LastIndex(value, ","); index >= 0 {
+		value = value[index+1:]
+	}
+
+	return strings.TrimSpace(value)
+}
+
+// validForwardedProto keeps a forwarded scheme to the four values a gateway can
+// legitimately assert. Without this, an arbitrary string reaches url.URL.Scheme
+// and ends up in absolute URLs this service emits.
+func validForwardedProto(proto string) bool {
+	switch proto {
+	case "http", "https", "ws", "wss":
+		return true
+	default:
+		return false
+	}
 }
 
 // peerIsTrusted reports whether remoteAddr (an http.Request.RemoteAddr,

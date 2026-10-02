@@ -2,6 +2,10 @@ package src
 
 import (
 	"encoding/json"
+	"io"
+	"os"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -9,6 +13,54 @@ import (
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
 )
+
+// captureStdout redirects os.Stdout for the duration of f and returns what was
+// written. logging.Logger writes straight to os.Stdout, so this is the only way
+// to observe its output without adding a dependency.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+
+	orig := os.Stdout
+	os.Stdout = w
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		captured strings.Builder
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b, _ := io.ReadAll(r)
+		mu.Lock()
+		captured.Write(b)
+		mu.Unlock()
+	}()
+
+	defer func() {
+		os.Stdout = orig
+		w.Close()
+		wg.Wait()
+		r.Close()
+	}()
+
+	f()
+
+	// Flush: close the writer so the reader sees EOF, then restore stdout.
+	os.Stdout = orig
+	w.Close()
+	wg.Wait()
+	r.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	return captured.String()
+}
 
 func createAuthInstance(claims []config.ClaimAssertion) *config.AuthorizationConfig {
 	return &config.AuthorizationConfig{
@@ -214,6 +266,53 @@ func TestCombinedAssertions(t *testing.T) {
 
 	if isAuthorized(logger, authorization, claims) {
 		t.Fatal("Should not authorize since no value of the anyOf quantifier is matched")
+	}
+}
+
+func TestLogAvailableClaimsLogsNamesNotValues(t *testing.T) {
+	// Claims values here are deliberately PII-looking. A failing assertion makes
+	// the plugin dump the claims it could see, to help the operator; that dump must
+	// contain claim NAMES only. Logging values would write every user's email,
+	// name and group membership into the proxy log at DEBUG.
+	piiValues := map[string]string{
+		"email":  "alice.private.address@example.com",
+		"name":   "Alice VerySecret Surname",
+		"groups": "top-secret-group-membership",
+	}
+
+	claims := jwt.MapClaims{}
+	for k, v := range piiValues {
+		claims[k] = v
+	}
+
+	output := captureStdout(t, func() {
+		logger := logging.CreateLogger(logging.LevelDebug)
+		// Claim does not exist -> logAvailableClaims is reached.
+		authorization := createAuthInstance([]config.ClaimAssertion{
+			{Name: "nonexistent_claim", AnyOf: []string{"whatever"}},
+		})
+		if isAuthorized(logger, authorization, claims) {
+			t.Error("expected the assertion to fail so the claims are logged")
+		}
+	})
+
+	if !strings.Contains(output, "Available claims are:") {
+		t.Fatalf("expected the available-claims line, got:\n%s", output)
+	}
+	for name := range piiValues {
+		if !strings.Contains(output, name) {
+			t.Errorf("expected claim name %q in output, got:\n%s", name, output)
+		}
+	}
+	for name, value := range piiValues {
+		if strings.Contains(output, value) {
+			t.Errorf("claim VALUE for %q leaked into the log: %s", name, value)
+		}
+	}
+	// Belt and braces: the raw fragment of the PII value must not appear either,
+	// in case the value is ever formatted piecewise.
+	if strings.Contains(output, "example.com") || strings.Contains(output, "VerySecret") {
+		t.Errorf("PII leaked into the log output:\n%s", output)
 	}
 }
 

@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,30 +24,103 @@ import (
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
 )
 
+const (
+	// defaultOidcTimeout bounds outbound IDP calls when the config value is missing
+	// or non-positive. An unbounded call pins the request goroutine forever.
+	defaultOidcTimeout = 30 * time.Second
+
+	// maxOidcResponseBody caps how much of an IDP response we are willing to read.
+	// Token/introspection/userinfo responses are small; anything larger is a
+	// misconfigured or hostile endpoint and must not be buffered or logged.
+	maxOidcResponseBody = 1 << 20
+
+	// maxIdcErrorBody bounds the IDP error body echoed into logs. Error bodies from
+	// a token endpoint can echo the request (including client_secret) back.
+	maxIdcErrorBody = 512
+)
+
+// oidcTimeout returns the per-call deadline for outbound IDP requests.
+func (toa *TraefikOidcAuth) oidcTimeout() time.Duration {
+	if toa.Config == nil || toa.Config.Provider == nil || toa.Config.Provider.OidcTimeoutSeconds <= 0 {
+		return defaultOidcTimeout
+	}
+
+	return time.Duration(toa.Config.Provider.OidcTimeoutSeconds) * time.Second
+}
+
+// oidcContext derives a bounded context for IDP calls that have no request
+// context of their own (session refresh, background introspection).
+func (toa *TraefikOidcAuth) oidcContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), toa.oidcTimeout())
+}
+
+// secretValuePattern matches the JSON shape `client_secret": "value"` (and the
+// assertion equivalent). Providers commonly echo the whole request back in their
+// error body, so the configured secret is scrubbed by value and any other value
+// under these keys is scrubbed by key.
+var secretValuePattern = regexp.MustCompile(`(?i)("?(?:client_secret|client_assertion|client_assertion_type)"?\s*[:=]\s*"?)([^"&,\s}]+)`)
+
+// capIdcErrorBody truncates and scrubs an IDP error body so it can be logged
+// safely. Providers routinely echo the request parameters back in the error,
+// which would put the client secret into the log file.
+func capIdcErrorBody(toa *TraefikOidcAuth, body []byte) string {
+	if toa != nil && toa.Config != nil && toa.Config.Provider != nil {
+		body = []byte(scrubSecret(body, toa.Config.Provider.ClientSecret))
+		body = []byte(scrubSecret(body, toa.Config.Provider.ClientId))
+	}
+
+	body = secretValuePattern.ReplaceAll(body, []byte("${1}[REDACTED]"))
+
+	if len(body) > maxIdcErrorBody {
+		return string(body[:maxIdcErrorBody]) + "...(truncated)"
+	}
+
+	return string(body)
+}
+
+// scrubSecret replaces every occurrence of secret with a placeholder.
+func scrubSecret(body []byte, secret string) string {
+	if secret == "" {
+		return string(body)
+	}
+
+	return strings.ReplaceAll(string(body), secret, "[REDACTED]")
+}
+
+// logIdcErrorBody logs a truncated, scrubbed IDP error body at WARN. The body is
+// attacker-influenced and may contain credentials, so it never goes to INFO.
+func logIdcErrorBody(toa *TraefikOidcAuth, operation string, resp *http.Response) {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxOidcResponseBody))
+	toa.logger.Log(logging.LevelWarn, "%s: Provider returned status %d: %s", operation, resp.StatusCode, capIdcErrorBody(toa, body))
+}
+
 func GetOidcDiscovery(logger *logging.Logger, httpClient *http.Client, providerUrl *url.URL) (*oidc.OidcDiscovery, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultOidcTimeout)
+	defer cancel()
+
+	return GetOidcDiscoveryContext(ctx, logger, httpClient, providerUrl)
+}
+
+// GetOidcDiscoveryContext fetches the provider's discovery document. Discovery runs
+// under the middleware's load lock, so it must not be able to hang.
+func GetOidcDiscoveryContext(ctx context.Context, logger *logging.Logger, httpClient *http.Client, providerUrl *url.URL) (*oidc.OidcDiscovery, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	wellKnownUrl := *providerUrl
 
 	wellKnownUrl.Path = path.Join(wellKnownUrl.Path, ".well-known/openid-configuration")
 
-	// // create a http client with configurable options
-	// // needed to skip certificate verification
-	// tr := &http.Transport{
-	// 	MaxIdleConns:    10,
-	// 	IdleConnTimeout: 30 * time.Second,
-	// 	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	// }
-	// client := &http.Client{Transport: tr}
-
-	// Make HTTP GET request to the OpenID provider's discovery endpoint
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, wellKnownUrl.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnownUrl.String(), nil)
 	if err != nil {
-		logger.Log(logging.LevelError, "http-get discovery endpoints - Err: %s", err.Error())
+		logger.Log(logging.LevelError, "http-get discovery endpoints - Err: %v", err)
 		return nil, errors.New("HTTP GET error")
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		logger.Log(logging.LevelError, "http-get discovery endpoints - Err: %s", err.Error())
+		logger.Log(logging.LevelError, "http-get discovery endpoints - Err: %v", err)
 		return nil, errors.New("HTTP GET error")
 	}
 
@@ -57,12 +132,11 @@ func GetOidcDiscovery(logger *logging.Logger, httpClient *http.Client, providerU
 		return nil, errors.New("HTTP error - Status code: " + resp.Status)
 	}
 
-	// Decode the JSON response
 	document := oidc.OidcDiscovery{}
-	err = json.NewDecoder(resp.Body).Decode(&document)
+	err = json.NewDecoder(io.LimitReader(resp.Body, maxOidcResponseBody)).Decode(&document)
 	if err != nil {
-		logger.Log(logging.LevelError, "Failed to decode OIDC discovery document. Status code: %s", err.Error())
-		return &document, errors.New("Failed to decode OIDC discovery document. Status code: " + err.Error())
+		logger.Log(logging.LevelError, "Failed to decode OIDC discovery document: %v", err)
+		return &document, fmt.Errorf("failed to decode OIDC discovery document: %w", err)
 	}
 
 	return &document, nil
@@ -79,6 +153,13 @@ func randomBytesInHex(count int) (string, error) {
 }
 
 func exchangeAuthCode(oidcAuth *TraefikOidcAuth, req *http.Request, authCode string, codeVerifierEnc string) (*oidc.OidcTokenResponse, error) {
+	ctx, cancel := oidcAuth.oidcContext()
+	defer cancel()
+
+	return exchangeAuthCodeContext(ctx, oidcAuth, req, authCode, codeVerifierEnc)
+}
+
+func exchangeAuthCodeContext(ctx context.Context, oidcAuth *TraefikOidcAuth, req *http.Request, authCode string, codeVerifierEnc string) (*oidc.OidcTokenResponse, error) {
 	redirectUrl := oidcAuth.GetAbsoluteCallbackURL(req).String()
 
 	urlValues := url.Values{
@@ -116,49 +197,149 @@ func exchangeAuthCode(oidcAuth *TraefikOidcAuth, req *http.Request, authCode str
 		urlValues.Add("code_verifier", codeVerifier)
 	}
 
-	tokenReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, oidcAuth.DiscoveryDocument.TokenEndpoint, strings.NewReader(urlValues.Encode()))
+	return oidcAuth.postFormToTokenEndpoint(ctx, "exchangeAuthCode", urlValues)
+}
+
+// renewToken exchanges a refresh token for a new access token.
+func (toa *TraefikOidcAuth) renewToken(refreshToken string) (*oidc.OidcTokenResponse, error) {
+	ctx, cancel := toa.oidcContext()
+	defer cancel()
+
+	return toa.renewTokenContext(ctx, refreshToken)
+}
+
+func (toa *TraefikOidcAuth) renewTokenContext(ctx context.Context, refreshToken string) (*oidc.OidcTokenResponse, error) {
+	urlValues := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {toa.Config.Provider.ClientId},
+		"scope":         {strings.Join(toa.Config.Scopes, " ")},
+		"refresh_token": {refreshToken},
+		"resources":     toa.Config.RequestedResources,
+	}
+
+	if toa.Config.Provider.ClientSecret != "" {
+		urlValues.Add("client_secret", toa.Config.Provider.ClientSecret)
+	}
+
+	if toa.ClientJwtPrivateKey != nil {
+		clientAssertionToken, err := toa.getClientAssertionJwtToken()
+		if err != nil {
+			return nil, err
+		}
+
+		urlValues.Add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+		urlValues.Add("client_assertion", clientAssertionToken)
+	}
+
+	return toa.postFormToTokenEndpoint(ctx, "renewToken", urlValues)
+}
+
+// postFormToTokenEndpoint performs the shared form-POST to the token endpoint used
+// by both the authorization_code and refresh_token grants.
+func (toa *TraefikOidcAuth) postFormToTokenEndpoint(ctx context.Context, operation string, urlValues url.Values) (*oidc.OidcTokenResponse, error) {
+	if toa.DiscoveryDocument == nil || toa.DiscoveryDocument.TokenEndpoint == "" {
+		return nil, errors.New("token_endpoint is not set")
+	}
+
+	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodPost, toa.DiscoveryDocument.TokenEndpoint, strings.NewReader(urlValues.Encode()))
 	if err != nil {
-		oidcAuth.logger.Log(logging.LevelError, "exchangeAuthCode: couldn't create token request: %s", err.Error())
+		toa.logger.Log(logging.LevelError, "%s: couldn't create token request: %v", operation, err)
 		return nil, err
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := oidcAuth.httpClient.Do(tokenReq)
+	resp, err := toa.httpClient.Do(tokenReq)
 	if err != nil {
-		oidcAuth.logger.Log(logging.LevelError, "exchangeAuthCode: couldn't POST to Provider: %s", err.Error())
+		toa.logger.Log(logging.LevelError, "%s: couldn't POST to Provider: %v", operation, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		oidcAuth.logger.Log(logging.LevelError, "exchangeAuthCode: received bad HTTP response from Provider (Status: %d): %s", resp.StatusCode, string(body))
+		logIdcErrorBody(toa, operation, resp)
 		return nil, errors.New("invalid status code")
 	}
 
-	tokenResponse := &oidc.OidcTokenResponse{}
-	err = json.NewDecoder(resp.Body).Decode(tokenResponse)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOidcResponseBody+1))
 	if err != nil {
-		oidcAuth.logger.Log(logging.LevelError, "exchangeAuthCode: couldn't decode OidcTokenResponse: %s", err.Error())
+		toa.logger.Log(logging.LevelError, "%s: couldn't read token response: %v", operation, err)
+		return nil, err
+	}
+
+	if len(body) > maxOidcResponseBody {
+		toa.logger.Log(logging.LevelError, "%s: token response exceeds %d bytes", operation, maxOidcResponseBody)
+		return nil, errors.New("token response too large")
+	}
+
+	tokenResponse := &oidc.OidcTokenResponse{}
+	if err := json.Unmarshal(body, tokenResponse); err != nil {
+		toa.logger.Log(logging.LevelError, "%s: couldn't decode OidcTokenResponse: %v", operation, err)
 		return nil, err
 	}
 
 	return tokenResponse, nil
 }
 
-func (toa *TraefikOidcAuth) validateTokenLocally(tokenString string, expectedNonce string) (bool, map[string]interface{}, error) {
-	claims := jwt.MapClaims{}
-
-	err := toa.Jwks.EnsureLoaded(toa.logger, toa.httpClient, false)
-	if err != nil {
-		return false, nil, err
+// parseJwtWithJwksRetry parses a locally-validated JWT, force-reloading the JWKS once
+// on a non-expiry failure (unknown kid after a key rotation). Centralised so both
+// local parsers - id/access token and the signed userinfo response - share the retry
+// and cannot drift apart.
+func (toa *TraefikOidcAuth) parseJwtWithJwksRetry(ctx context.Context, tokenString string, options []jwt.ParserOption, operation string) (jwt.MapClaims, error) {
+	// Bounded: a hanging JWKS endpoint must not pin the request that needs the key.
+	if err := toa.Jwks.EnsureLoadedContext(ctx, toa.logger, toa.httpClient, false); err != nil {
+		return nil, err
 	}
 
+	parser := jwt.NewParser(options...)
+
+	claims := jwt.MapClaims{}
+
+	_, err := parser.ParseWithClaims(tokenString, claims, toa.Jwks.Keyfunc)
+	if err == nil {
+		return claims, nil
+	}
+
+	// If the token is expired, reloading JWKS won't help — skip the retry.
+	if isTokenExpiredError(err) {
+		toa.logger.Log(logging.LevelInfo, "The token is expired.")
+		return nil, err
+	}
+
+	if err := toa.Jwks.EnsureLoadedContext(ctx, toa.logger, toa.httpClient, true); err != nil {
+		return nil, err
+	}
+
+	claims = jwt.MapClaims{}
+
+	if _, err := parser.ParseWithClaims(tokenString, claims, toa.Jwks.Keyfunc); err != nil {
+		if isTokenExpiredError(err) {
+			toa.logger.Log(logging.LevelInfo, "The token is expired.")
+		} else {
+			toa.logger.Log(logging.LevelError, "Failed to parse %s token: %v", operation, err)
+		}
+
+		return nil, err
+	}
+
+	return claims, nil
+}
+
+func (toa *TraefikOidcAuth) validateTokenLocally(tokenString string, expectedNonce string) (bool, map[string]interface{}, error) {
+	ctx, cancel := toa.oidcContext()
+	defer cancel()
+
+	return toa.validateTokenLocallyContext(ctx, tokenString, expectedNonce)
+}
+
+func (toa *TraefikOidcAuth) validateTokenLocallyContext(ctx context.Context, tokenString string, expectedNonce string) (bool, map[string]interface{}, error) {
 	leeway := time.Duration(toa.Config.Provider.TokenClockSkewSeconds) * time.Second
 
 	options := []jwt.ParserOption{
 		jwt.WithExpirationRequired(),
 		jwt.WithLeeway(leeway),
+		// Defence in depth: the key lookup already rejects unknown algorithms,
+		// but the parser must not accept a method the allowlist does not name.
+		jwt.WithValidMethods(oidc.AllowedAlgorithms()),
 	}
 
 	if toa.Config.Provider.ValidateIssuerBool {
@@ -168,42 +349,19 @@ func (toa *TraefikOidcAuth) validateTokenLocally(tokenString string, expectedNon
 		options = append(options, jwt.WithAudience(toa.Config.Provider.ValidAudience))
 	}
 
-	parser := jwt.NewParser(options...)
-
-	_, err = parser.ParseWithClaims(tokenString, claims, toa.Jwks.Keyfunc)
+	parsed, err := toa.parseJwtWithJwksRetry(ctx, tokenString, options, "id/access")
 	if err != nil {
-		// If the token is expired, reloading JWKS won't help — skip the retry.
-		if isTokenExpiredError(err) {
-			toa.logger.Log(logging.LevelInfo, "The token is expired.")
-			return false, nil, err
-		}
-
-		// For other errors (e.g. unknown kid after key rotation), force-reload JWKS and retry.
-		err := toa.Jwks.EnsureLoaded(toa.logger, toa.httpClient, true)
-		if err != nil {
-			return false, nil, err
-		}
-
-		_, err = parser.ParseWithClaims(tokenString, claims, toa.Jwks.Keyfunc)
-		if err != nil {
-			if isTokenExpiredError(err) {
-				toa.logger.Log(logging.LevelInfo, "The token is expired.")
-			} else {
-				toa.logger.Log(logging.LevelError, "Failed to parse token: %v", err)
-			}
-
-			return false, nil, err
-		}
+		return false, nil, err
 	}
 
 	if expectedNonce != "" && toa.Config.Provider.ValidateNonceBool {
-		claimNonce, _ := claims["nonce"].(string)
+		claimNonce, _ := parsed["nonce"].(string)
 		if !oidcNonceMatches(claimNonce, expectedNonce) {
 			return false, nil, errors.New("oidc nonce mismatch")
 		}
 	}
 
-	return true, claims, nil
+	return true, parsed, nil
 }
 
 func oidcNonceMatches(claimNonce, expected string) bool {
@@ -215,10 +373,32 @@ func oidcNonceMatches(claimNonce, expected string) bool {
 // which may not fully support Go 1.20's multi-error unwrapping needed for errors.Is
 // to traverse the joinedError wrapper used by golang-jwt/v5.
 func isTokenExpiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+
 	return strings.Contains(err.Error(), jwt.ErrTokenExpired.Error())
 }
 
 func (toa *TraefikOidcAuth) introspectToken(token string) (bool, map[string]interface{}, error) {
+	ctx, cancel := toa.oidcContext()
+	defer cancel()
+
+	return toa.introspectTokenContext(ctx, token)
+}
+
+// introspectTokenContext asks the IDP whether a token is still active.
+//
+// CALLERS MUST HONOUR THE RETURNED BOOL. It is false only when the IDP positively
+// reports {"active": false}; every other failure (transport error, non-200,
+// undecodable body, missing/non-boolean "active") returns false AND a non-nil
+// error. Never treat a nil error with a false bool as "active", and never ignore
+// the error and use the claims.
+func (toa *TraefikOidcAuth) introspectTokenContext(ctx context.Context, token string) (bool, map[string]interface{}, error) {
+	if toa.DiscoveryDocument == nil || toa.DiscoveryDocument.IntrospectionEndpoint == "" {
+		return false, nil, errors.New("introspection_endpoint is not set")
+	}
+
 	data := url.Values{
 		"token": {token},
 	}
@@ -233,16 +413,10 @@ func (toa *TraefikOidcAuth) introspectToken(token string) (bool, map[string]inte
 		data.Add("client_assertion", clientAssertionToken)
 	}
 
-	// log(toa.Config.LogLevel, LogLevelDebug, "Token: %s", token)
-
 	endpoint := toa.DiscoveryDocument.IntrospectionEndpoint
 
-	// if endpoint == "" {
-	//	endpoint = toa.DiscoveryDocument.UserinfoEndpoint
-	//}
-
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		endpoint,
 		strings.NewReader(data.Encode()),
@@ -256,74 +430,114 @@ func (toa *TraefikOidcAuth) introspectToken(token string) (bool, map[string]inte
 
 	resp, err := toa.httpClient.Do(req)
 	if err != nil {
-		toa.logger.Log(logging.LevelError, "Error on introspection request: %s", err.Error())
+		toa.logger.Log(logging.LevelError, "Error on introspection request: %v", err)
 		return false, nil, err
 	}
 
-	defer resp.Body.Close()
-
-	var introspectResponse map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&introspectResponse)
-	if err != nil {
-		toa.logger.Log(logging.LevelError, "Failed to decode introspection response: %s", err.Error())
-		return false, nil, err
-	}
-
-	// TODO: Remove
-	// toa.logAvailableClaims(introspectResponse)
-
-	if introspectResponse["active"] != nil {
-		active, ok := introspectResponse["active"].(bool)
-		if !ok {
-			return false, nil, errors.New("received invalid introspection response")
-		}
-		return active, introspectResponse, nil
-	}
-
-	return false, nil, errors.New("received invalid introspection response")
-}
-
-func (toa *TraefikOidcAuth) renewToken(refreshToken string) (*oidc.OidcTokenResponse, error) {
-	urlValues := url.Values{
-		"grant_type":    {"refresh_token"},
-		"client_id":     {toa.Config.Provider.ClientId},
-		"scope":         {strings.Join(toa.Config.Scopes, " ")},
-		"refresh_token": {refreshToken},
-		"resources":     toa.Config.RequestedResources,
-	}
-
-	if toa.Config.Provider.ClientSecret != "" {
-		urlValues.Add("client_secret", toa.Config.Provider.ClientSecret)
-	}
-
-	tokenReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, toa.DiscoveryDocument.TokenEndpoint, strings.NewReader(urlValues.Encode()))
-	if err != nil {
-		toa.logger.Log(logging.LevelError, "renewToken: couldn't create token request: %s", err.Error())
-		return nil, err
-	}
-	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := toa.httpClient.Do(tokenReq)
-	if err != nil {
-		toa.logger.Log(logging.LevelError, "renewToken: couldn't POST to Provider: %s", err.Error())
-		return nil, err
-	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		toa.logger.Log(logging.LevelError, "renewToken: received bad HTTP response from Provider: %s", string(body))
-		return nil, errors.New("invalid status code")
+		logIdcErrorBody(toa, "introspectToken", resp)
+		return false, nil, fmt.Errorf("introspection returned status %d", resp.StatusCode)
 	}
 
-	tokenResponse := &oidc.OidcTokenResponse{}
-	err = json.NewDecoder(resp.Body).Decode(tokenResponse)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOidcResponseBody+1))
 	if err != nil {
-		toa.logger.Log(logging.LevelError, "renewToken: couldn't decode OidcTokenResponse: %s", err.Error())
-		return nil, err
+		toa.logger.Log(logging.LevelError, "Failed to read introspection response: %v", err)
+		return false, nil, err
 	}
 
-	return tokenResponse, nil
+	if len(body) > maxOidcResponseBody {
+		toa.logger.Log(logging.LevelError, "introspectToken: introspection response exceeds %d bytes", maxOidcResponseBody)
+		return false, nil, errors.New("introspection response too large")
+	}
+
+	var introspectResponse map[string]interface{}
+	if err := json.Unmarshal(body, &introspectResponse); err != nil {
+		toa.logger.Log(logging.LevelError, "Failed to decode introspection response: %v", err)
+		return false, nil, err
+	}
+
+	active, ok := introspectResponse["active"].(bool)
+	if !ok {
+		return false, nil, errors.New("received invalid introspection response")
+	}
+
+	return active, introspectResponse, nil
+}
+
+// revokeToken revokes a refresh token at the IDP's revocation endpoint, so a
+// stolen refresh token cannot outlive the logout.
+//
+// Returns nil (no-op) when revocation is disabled, no endpoint is advertised, or
+// there is no refresh token. The caller MUST treat a non-nil error as
+// non-fatal - log it at WARN and complete the logout anyway - because a
+// misbehaving revocation endpoint must not strand a user in a session they asked
+// to end.
+func (toa *TraefikOidcAuth) revokeToken(ctx context.Context, refreshToken string) error {
+	if toa.Config == nil || toa.Config.Provider == nil || !toa.Config.Provider.RevokeTokensOnLogoutBool {
+		return nil
+	}
+
+	if toa.DiscoveryDocument == nil || toa.DiscoveryDocument.RevocationEndpoint == "" {
+		return nil
+	}
+
+	if refreshToken == "" {
+		return nil
+	}
+
+	data := url.Values{
+		"token":           {refreshToken},
+		"token_type_hint": {"refresh_token"},
+	}
+
+	// Same client-authentication mechanism as introspection: private_key_jwt when a
+	// client assertion key is configured, otherwise client_secret.
+	if toa.ClientJwtPrivateKey != nil {
+		clientAssertionToken, err := toa.getClientAssertionJwtToken()
+		if err != nil {
+			return err
+		}
+
+		data.Add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+		data.Add("client_assertion", clientAssertionToken)
+		data.Add("client_id", toa.Config.Provider.ClientId)
+	} else {
+		if toa.Config.Provider.ClientSecret == "" {
+			return errors.New("cannot revoke token: neither client assertion key nor client secret is configured")
+		}
+
+		data.Add("client_id", toa.Config.Provider.ClientId)
+		data.Add("client_secret", toa.Config.Provider.ClientSecret)
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		toa.DiscoveryDocument.RevocationEndpoint,
+		strings.NewReader(data.Encode()),
+	)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := toa.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// RFC 7009: the endpoint answers 200 even for an unknown token. Anything else
+	// means the revocation did not happen.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxOidcResponseBody))
+		return fmt.Errorf("revocation returned status %d: %s", resp.StatusCode, capIdcErrorBody(toa, body))
+	}
+
+	return nil
 }
 
 func (toa *TraefikOidcAuth) getClientAssertionJwtToken() (string, error) {
@@ -347,11 +561,18 @@ func (toa *TraefikOidcAuth) getClientAssertionJwtToken() (string, error) {
 }
 
 func (toa *TraefikOidcAuth) getUserInfo(accessToken string, idTokenSubject string) (map[string]interface{}, error) {
-	if toa.DiscoveryDocument.UserinfoEndpoint == "" {
+	ctx, cancel := toa.oidcContext()
+	defer cancel()
+
+	return toa.getUserInfoContext(ctx, accessToken, idTokenSubject)
+}
+
+func (toa *TraefikOidcAuth) getUserInfoContext(ctx context.Context, accessToken string, idTokenSubject string) (map[string]interface{}, error) {
+	if toa.DiscoveryDocument == nil || toa.DiscoveryDocument.UserinfoEndpoint == "" {
 		return nil, errors.New("userinfo_endpoint is not set")
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, toa.DiscoveryDocument.UserinfoEndpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, toa.DiscoveryDocument.UserinfoEndpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -367,8 +588,7 @@ func (toa *TraefikOidcAuth) getUserInfo(accessToken string, idTokenSubject strin
 		if resp.StatusCode == http.StatusUnauthorized {
 			return nil, errors.New("token is not valid")
 		}
-		body, _ := io.ReadAll(resp.Body)
-		toa.logger.Log(logging.LevelError, "getUserInfo: received bad HTTP response from Provider (Status: %d): %s", resp.StatusCode, string(body))
+		logIdcErrorBody(toa, "getUserInfo", resp)
 		return nil, fmt.Errorf("invalid status code: %d", resp.StatusCode)
 	}
 
@@ -377,51 +597,36 @@ func (toa *TraefikOidcAuth) getUserInfo(accessToken string, idTokenSubject strin
 
 	switch {
 	case strings.HasPrefix(contentType, "application/jwt"):
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxOidcResponseBody+1))
 		if err != nil {
 			return nil, err
 		}
+
+		if len(body) > maxOidcResponseBody {
+			toa.logger.Log(logging.LevelError, "getUserInfo: signed userinfo response exceeds %d bytes", maxOidcResponseBody)
+			return nil, errors.New("userinfo response too large")
+		}
+
 		tokenString := string(body)
 
-		claims := jwt.MapClaims{}
-
-		err = toa.Jwks.EnsureLoaded(toa.logger, toa.httpClient, false)
-		if err != nil {
-			return nil, err
+		options := []jwt.ParserOption{
+			jwt.WithLeeway(time.Duration(toa.Config.Provider.TokenClockSkewSeconds) * time.Second),
+			jwt.WithValidMethods(oidc.AllowedAlgorithms()),
 		}
-
-		options := []jwt.ParserOption{}
 
 		if toa.Config.Provider.ValidateIssuerBool {
 			options = append(options, jwt.WithIssuer(toa.Config.Provider.ValidIssuer))
 		}
 
-		parser := jwt.NewParser(options...)
-
-		_, err = parser.ParseWithClaims(tokenString, claims, toa.Jwks.Keyfunc)
+		claims, err := toa.parseJwtWithJwksRetry(ctx, tokenString, options, "userinfo")
 		if err != nil {
-			// If the token is expired, reloading JWKS won't help — skip the retry.
-			if isTokenExpiredError(err) {
-				toa.logger.Log(logging.LevelError, "Userinfo token is expired: %v", err)
-				return nil, err
-			}
-
-			err := toa.Jwks.EnsureLoaded(toa.logger, toa.httpClient, true)
-			if err != nil {
-				return nil, err
-			}
-
-			_, err = parser.ParseWithClaims(tokenString, claims, toa.Jwks.Keyfunc)
-			if err != nil {
-				toa.logger.Log(logging.LevelError, "Failed to parse userinfo token: %v", err)
-				return nil, err
-			}
+			return nil, err
 		}
+
 		userInfoClaims = claims
 	case strings.HasPrefix(contentType, "application/json"):
-		err = json.NewDecoder(resp.Body).Decode(&userInfoClaims)
-		if err != nil {
-			toa.logger.Log(logging.LevelError, "getUserInfo: couldn't decode OidcTokenResponse: %s", err.Error())
+		if err := json.NewDecoder(io.LimitReader(resp.Body, maxOidcResponseBody)).Decode(&userInfoClaims); err != nil {
+			toa.logger.Log(logging.LevelError, "getUserInfo: couldn't decode userinfo response: %v", err)
 			return nil, err
 		}
 	default:
@@ -440,6 +645,79 @@ func (toa *TraefikOidcAuth) getUserInfo(accessToken string, idTokenSubject strin
 	}
 
 	return userInfoClaims, nil
+}
+
+// authParamsForChallenge returns extra authorization-request parameters to add when
+// the login was triggered by an authorization re-check (Challenge behaviour).
+//
+// Step-up is the point of the Challenge behaviour: sending max_age forces the IDP to
+// re-authenticate instead of silently reusing an existing IDP session, so a route
+// advertised as requiring fresh authentication cannot be satisfied by an
+// authentication from hours ago. Returns nil when there is nothing to add, so the
+// caller can range over the result unconditionally.
+func (toa *TraefikOidcAuth) authParamsForChallenge(isChallenge bool) map[string]string {
+	if !isChallenge || toa.Config == nil || toa.Config.Provider == nil {
+		return nil
+	}
+
+	if toa.Config.Provider.MaxAuthAgeSeconds <= 0 {
+		return nil
+	}
+
+	return map[string]string{
+		"max_age": strconv.Itoa(toa.Config.Provider.MaxAuthAgeSeconds),
+	}
+}
+
+// authTimeIsFresh reports whether the ID token was issued from an authentication
+// that is recent enough for provider.max_auth_age_seconds.
+//
+// A missing auth_time while the feature is enabled is treated as NOT fresh: an IDP
+// that silently omits the claim must not be able to bypass step-up.
+func (toa *TraefikOidcAuth) authTimeIsFresh(claims map[string]any, now time.Time) bool {
+	if toa.Config == nil || toa.Config.Provider == nil || toa.Config.Provider.MaxAuthAgeSeconds <= 0 {
+		return true
+	}
+
+	authTime, ok := authTimeFromClaims(claims)
+	if !ok {
+		return false
+	}
+
+	maxAge := time.Duration(toa.Config.Provider.MaxAuthAgeSeconds) * time.Second
+
+	return !authTime.Add(maxAge).Before(now)
+}
+
+// authTimeFromClaims reads the OIDC auth_time claim, which providers encode either
+// as a JSON number of seconds since the epoch or (less commonly) as an RFC3339
+// timestamp. The second return value reports whether a usable value was found.
+func authTimeFromClaims(claims map[string]any) (time.Time, bool) {
+	if claims == nil {
+		return time.Time{}, false
+	}
+
+	switch value := claims["auth_time"].(type) {
+	case float64:
+		return time.Unix(int64(value), 0).UTC(), true
+	case json.Number:
+		if seconds, err := value.Int64(); err == nil {
+			return time.Unix(seconds, 0).UTC(), true
+		}
+	case int64:
+		return time.Unix(value, 0).UTC(), true
+	case int:
+		return time.Unix(int64(value), 0).UTC(), true
+	case string:
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			return parsed.UTC(), true
+		}
+		if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return time.Unix(seconds, 0).UTC(), true
+		}
+	}
+
+	return time.Time{}, false
 }
 
 // mergeClaims merges userinfo claims into token claims, preserving security-critical claims

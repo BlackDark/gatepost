@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/spyzhov/ajson"
@@ -128,10 +129,16 @@ func isAuthorized(logger *logging.Logger, authorization *config.AuthorizationCon
 	return true
 }
 
+// logAvailableClaims logs the claim NAMES available to the rule, never their values.
+// Values routinely carry PII (email, name, group membership) and a rule author already
+// has the claims they care about in their configuration, so the names are the only part
+// that helps diagnose a mismatch.
 func logAvailableClaims(logger *logging.Logger, claims map[string]interface{}) {
-	logger.Log(logging.LevelDebug, "Available claims are:")
-
-	for key, val := range claims {
-		logger.Log(logging.LevelDebug, "  %v = %v", key, val)
+	names := make([]string, 0, len(claims))
+	for key := range claims {
+		names = append(names, key)
 	}
+
+	sort.Strings(names)
+	logger.Log(logging.LevelDebug, "Available claims are: %s", strings.Join(names, ", "))
 }

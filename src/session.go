@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
@@ -35,6 +36,11 @@ func (toa *TraefikOidcAuth) getSessionForRequest(req *http.Request) (*session.Se
 			if ok {
 				return session, false, claims, err
 			}
+			// err may be nil while ok is false: Introspection reports an inactive token
+			// with a nil error. Synthesise one instead of dereferencing it.
+			if err == nil {
+				err = errors.New("token is not valid")
+			}
 			return nil, false, nil, fmt.Errorf("failed to validate token from AuthorizationHeader: %s", err.Error())
 		}
 	}
@@ -56,6 +62,11 @@ func (toa *TraefikOidcAuth) getSessionForRequest(req *http.Request) (*session.Se
 			if ok {
 				return session, false, claims, err
 			}
+			// err may be nil while ok is false: Introspection reports an inactive token
+			// with a nil error. Synthesise one instead of dereferencing it.
+			if err == nil {
+				err = errors.New("token is not valid")
+			}
 			return nil, false, nil, fmt.Errorf("failed to validate token from AuthorizationCookie: %s", err.Error())
 		}
 	}
@@ -74,7 +85,7 @@ func (toa *TraefikOidcAuth) getSessionForRequest(req *http.Request) (*session.Se
 		return nil, false, claims, fmt.Errorf("failed to validate session ticket: %s", err.Error())
 	}
 
-	if toa.logger.MinLevel == logging.LevelDebug {
+	if toa.logger.MinLevel == logging.LevelDebug && session != nil {
 		tokenExpiresText := ""
 		if session.TokenExpiresIn > 0 {
 			tokenExpiresText = fmt.Sprintf("The IDP token expires in %ds.", int(math.Round(time.Until(session.RefreshedAt.Add(time.Duration(session.TokenExpiresIn)*time.Second)).Seconds())))
@@ -95,6 +106,12 @@ func validateSessionTicket(toa *TraefikOidcAuth, sessionTicket string) (*session
 	if session == nil {
 		toa.logger.Log(logging.LevelDebug, "No session found")
 		return nil, nil, nil, nil
+	}
+
+	if err := checkSessionBounds(toa, session); err != nil {
+		// Returning an error here is the plugin's normal "no usable session" convention:
+		// ServeHTTP clears the cookie and falls through to the unauthenticated handling.
+		return nil, nil, nil, err
 	}
 
 	success, claims, err := toa.validateToken(session)
@@ -155,7 +172,43 @@ func validateSessionTicket(toa *TraefikOidcAuth, sessionTicket string) (*session
 		return nil, nil, nil, err
 	}
 
+	// Refreshed on the accepted path too, so a session that is used without being renewed
+	// still makes progress against the idle bound once it is stored again.
+	session.LastUsedAt = time.Now().UTC()
+
 	return session, claims, nil, nil
+}
+
+// errSessionExpired is returned when a session exceeded a configured lifetime bound. It
+// deliberately carries no session id, cookie or ciphertext so it stays safe to surface.
+var errSessionExpired = errors.New("session expired")
+
+// checkSessionBounds enforces the configured session lifetime bounds. The session state
+// lives in a sealed client-side cookie, so these two timestamps are the only way to end a
+// session: logout only clears the browser copy and a captured cookie otherwise renews for
+// as long as the IDP honours the refresh token.
+// A 0 bound disables the check, matching src.New's config validation.
+func checkSessionBounds(toa *TraefikOidcAuth, state *session.SessionState) error {
+	if toa.Config == nil {
+		return nil
+	}
+
+	if maxLifetime := toa.Config.MaxSessionLifetimeSeconds; maxLifetime > 0 && !state.CreatedAt.IsZero() {
+		if time.Since(state.CreatedAt) > time.Duration(maxLifetime)*time.Second {
+			// No identifiers in this log: session ids and cookies must not reach the log.
+			toa.logger.Log(logging.LevelInfo, "Session exceeded the configured max lifetime, rejecting it")
+			return errSessionExpired
+		}
+	}
+
+	if idle := toa.Config.SessionIdleTimeoutSeconds; idle > 0 && !state.LastUsedAt.IsZero() {
+		if time.Since(state.LastUsedAt) > time.Duration(idle)*time.Second {
+			toa.logger.Log(logging.LevelInfo, "Session exceeded the configured idle timeout, rejecting it")
+			return errSessionExpired
+		}
+	}
+
+	return nil
 }
 
 func checkIdpTokenExpiresSoon(toa *TraefikOidcAuth, session *session.SessionState) bool {
@@ -218,20 +271,48 @@ func (toa *TraefikOidcAuth) validateToken(session *session.SessionState) (bool, 
 	return ok, claims, err
 }
 
-func (toa *TraefikOidcAuth) storeSessionAndAttachCookie(session *session.SessionState, rw http.ResponseWriter) {
+// storeSessionAndAttachCookie seals the session and emits the session cookie.
+//
+// On failure it writes the 500 itself and returns a non-nil error. The response is
+// then committed, so EVERY caller must return immediately on a non-nil error and
+// must not forward the request upstream or redirect: a superseded WriteHeader is
+// silently dropped, the body would be spliced onto the error, and the backend would
+// serve a request whose session this middleware just declared unpersistable.
+func (toa *TraefikOidcAuth) storeSessionAndAttachCookie(session *session.SessionState, rw http.ResponseWriter) error {
 	sessionTicket, err := toa.SessionStorage.StoreSession(toa.logger, toa.Config, session.Id, session)
 	if err != nil {
 		toa.logger.Log(logging.LevelError, "Failed to store session: %s", err.Error())
-		http.Error(rw, err.Error(), http.StatusInternalServerError)
-		return
+		// Do not echo err.Error(): ErrSessionTooLarge and marshal failures describe
+		// internal limits and configuration, which is not the caller's business.
+		http.Error(rw, "Failed to store session", http.StatusInternalServerError)
+		return err
 	}
 
 	toa.logger.Log(logging.LevelDebug, "Session stored. Id %s", session.Id)
 
 	setChunkedCookies(toa.Config, rw, getSessionCookieName(toa.Config), sessionTicket)
+
+	return nil
 }
 
+// warnedSameSites tracks the invalid same_site values already reported. src.New rejects
+// them outright, so this path is only reachable when a config bypasses New; warn, but do
+// not turn every request into a log line.
+var warnedSameSites sync.Map
+
 func createSessionCookie(config *config.Config) *http.Cookie {
+	sameSite, err := parseCookieSameSiteChecked(config.SessionCookie.SameSite)
+	if err != nil {
+		if _, alreadyWarned := warnedSameSites.LoadOrStore(config.SessionCookie.SameSite, true); !alreadyWarned {
+			logging.CreateLogger(config.LogLevel).Log(
+				logging.LevelWarn,
+				"Invalid sessionCookie.sameSite %q, falling back to \"lax\": %s",
+				config.SessionCookie.SameSite,
+				err.Error(),
+			)
+		}
+	}
+
 	return &http.Cookie{
 		Name:     getSessionCookieName(config),
 		Value:    "",
@@ -239,7 +320,7 @@ func createSessionCookie(config *config.Config) *http.Cookie {
 		HttpOnly: config.SessionCookie.HttpOnly,
 		Path:     config.SessionCookie.Path,
 		Domain:   config.SessionCookie.Domain,
-		SameSite: parseCookieSameSite(config.SessionCookie.SameSite),
+		SameSite: sameSite,
 		MaxAge:   config.SessionCookie.MaxAge,
 	}
 }

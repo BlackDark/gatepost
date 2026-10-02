@@ -10,17 +10,67 @@ Source: `cmd/extauth-server/`.
 CONFIG_FILE=./config.json LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/extauth-server
 ```
 
-- `CONFIG_FILE` — path to a JSON config file, same shape as `.traefik.yml`'s `testData` / Traefik's dynamic plugin config (see `src/config/config.go` for all fields). Values support `${VAR}` and `${file:/path}` expansion (same as Traefik).
+- `CONFIG_FILE` — path to a JSON config file. It carries the **same fields** as `.traefik.yml`'s `testData` / Traefik's dynamic plugin config (see `src/config/config.go` for all of them), but it is **not** the same *spelling*: `CONFIG_FILE` is decoded with `encoding/json`, so it uses the **snake_case `json` tags**, while Traefik decodes the plugin config with `mapstructure` and **no `TagName`**, which means it matches the **Go field name case-insensitively and ignores the `json` tags** — Traefik YAML therefore uses **camelCase**. Copying a Traefik config into `CONFIG_FILE` as-is (`clientId`, `callbackUri`, ...) decodes to zero values **without any error**, and `clientId` is silently dropped. Values support `${VAR}` and `${file:/path}` expansion (same as Traefik).
 - `LISTEN_ADDR` — HTTP mode listener. Default `:9002`.
 - `GRPC_LISTEN_ADDR` — gRPC mode listener. Unset by default (gRPC server does not start unless set).
 
 Both modes can run simultaneously against the same config/session state — pick whichever your gateway supports; see the compatibility table below.
+
+### Example `CONFIG_FILE`
+
+`CONFIG_FILE` is JSON decoded, so the keys are the **snake_case `json` tags** from `src/config/config.go` — including `provider.client_id` / `provider.client_secret`, **not** `clientId` / `clientSecret`. A camelCase key is silently ignored, which typically shows up as an empty client id and a failing login rather than as a config error.
+
+```json
+{
+  "log_level": "INFO",
+  "secret": "0123456789abcdef0123456789abcdef",
+  "callback_uri": "/oidc/callback",
+  "session_cookie": {
+    "domain": ".example.com"
+  },
+  "max_session_lifetime_seconds": 3600,
+  "session_idle_timeout_seconds": 900,
+  "authorization_params": {
+    "acr_values": "aal2"
+  },
+  "authorization_params_overridable": [],
+  "provider": {
+    "url": "https://idp.example.com",
+    "client_id": "<YourClientId>",
+    "client_secret": "<YourClientSecret>",
+    "max_auth_age_seconds": 300,
+    "oidc_timeout_seconds": 30,
+    "revoke_tokens_on_logout_bool": true
+  }
+}
+```
+
+:::warning Boolean provider options: use the `_bool` key in `CONFIG_FILE`
+The `bool`-typed provider options (`use_pkce`, `validate_audience`, `validate_issuer`, `validate_nonce`, `use_claims_from_user_info`, `insecure_skip_verify`, and `revoke_tokens_on_logout`) are declared in Go as a **string** field plus a separate `bool` field carrying the `_bool` json tag — see `RevokeTokensOnLogout string` / `RevokeTokensOnLogoutBool bool` in `src/config/config.go`. The **string** field exists only to serve Traefik's weakly-typed `mapstructure` decoder and `${VAR}` expansion (a YAML `true` or `"${FLAG}"` binds to a string there); the **bool** field is what the code actually reads.
+
+`CONFIG_FILE` is decoded with `encoding/json`, which is strictly typed. So on the **JSON** surface, the key that accepts a JSON boolean is the **`*_bool` one**; the plain name takes a **string**. Writing `"revoke_tokens_on_logout": true` is not a warning, it is a hard startup failure:
+
+```
+extauth-server: config error: parsing ./config.json: json: cannot unmarshal bool into Go struct field Config.provider.revoke_tokens_on_logout of type string
+```
+
+…and the process exits `1` before the listener starts. `"revoke_tokens_on_logout": "true"` (quoted) also loads — it is expanded into the bool field — but `"revoke_tokens_on_logout_bool": true` is the form to write.
+
+:::note There is no `trusted_proxies` in this example on purpose
+`trusted_proxies` is a real config key, but in **HTTP mode it does nothing**: `cmd/extauth-server` gates the `X-Forwarded-*` rewrite on the **`TRUSTED_PROXIES` environment variable** (parsed in `main.go`, checked against the TCP peer address in `forwardedRequest`), not on the config key. This is a **different mechanism**, not a second spelling of one — see [`TRUSTED_PROXIES`](#trusted-proxies-http-mode-only) below. The Traefik plugin, by contrast, reads the `trustedProxies` config key.
+:::
+
+The equivalent keys in **Traefik's** dynamic config for the same options are `logLevel`, `secret`, `callbackUri`, `sessionCookie`, `maxSessionLifetimeSeconds`, `sessionIdleTimeoutSeconds`, `trustedProxies`, `authorizationParams`, `authorizationParamsOverridable`, `provider.clientId`, `provider.clientSecret`, `provider.maxAuthAgeSeconds`, `provider.oidcTimeoutSeconds`, `provider.revokeTokensOnLogout` (the string-typed field — Traefik decodes `true` into it fine). Note the two exceptions above: `trustedProxies` is **mechanism-different** in HTTP mode (environment variable only), and every boolean option has a distinct `*_bool` JSON key. See the casing table in [`website/docs/getting-started/middleware-configuration.md`](../website/docs/getting-started/middleware-configuration.md#plugin-config-block).
 
 ## Network exposure
 
 `extauth-server` is called only by the gateway (Traefik/Envoy Gateway) — never directly by browsers or API clients. The gateway calls it internally on every request, then relays the allow/deny decision back to the actual client as if it came from the protected backend. Expose it via `ClusterIP` only; it needs no public listener, ingress, or externally-resolvable name. Restrict ingress to the gateway's namespace/pods with a `NetworkPolicy` — this is defense-in-depth alongside `TRUSTED_PROXIES` below, not a substitute for it (see Security review).
 
 ## `TRUSTED_PROXIES` (HTTP mode only)
+
+:::caution This is not the `trustedProxies` config key
+`extauth-server` reads the trusted-proxy allowlist **only** from the `TRUSTED_PROXIES` **environment variable** — `parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))` in `cmd/extauth-server/main.go`. The `trustedProxies` key in `CONFIG_FILE` has no effect on this path: it is decoded into `config.TrustedProxies`, which HTTP mode's `forwardedRequest()` never consults. The Traefik plugin, by contrast, is gated by the `trustedProxies` **config key** and has no environment variable. Two surfaces, two mechanisms — setting one does not set the other.
+:::
 
 HTTP mode's `X-Forwarded-Method`/`X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Forwarded-Uri` headers are only honored when the request's TCP peer address matches an entry in `TRUSTED_PROXIES` — a comma-separated list of IPs and/or CIDR ranges (e.g. `TRUSTED_PROXIES=10.42.0.0/16` for a typical pod CIDR, or the specific IP(s) of your gateway's pods/Service). **Unset by default — meaning `X-Forwarded-*` headers are never honored from anyone**, and the server logs a startup warning. This is deliberately fail-closed: get the gateway's source CIDR right, or HTTP mode will treat every request as its own literal request (no path/method rewriting), which is safe but breaks routing for gateways that rely on those headers (Traefik `forwardAuth`).
 

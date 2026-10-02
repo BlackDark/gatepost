@@ -11,11 +11,38 @@ import (
 	"time"
 
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
 )
 
+const (
+	// SessionCookieChunkSize is the payload size of a single chunk cookie.
+	SessionCookieChunkSize = session.ChunkSize
+	// MaxSessionCookieChunks bounds how many chunk cookies the middleware will ever
+	// read or emit. Without it, a single unauthenticated request carrying an
+	// attacker-chosen "<name>.Chunks=2000000000" cookie made us emit (or iterate)
+	// billions of Set-Cookie headers, exhausting memory in the proxy.
+	MaxSessionCookieChunks = session.MaxChunks
+	// MaxSessionCookieSize is the largest session ticket that can be stored.
+	MaxSessionCookieSize = session.MaxTicketSize
+)
+
+// sessionCookieChunkSize is the internal alias kept so the cookie code reads uniformly.
+const sessionCookieChunkSize = SessionCookieChunkSize
+
+// ErrSessionTooLarge is returned when an encrypted session ticket cannot fit in the
+// cookie budget.
+var ErrSessionTooLarge = session.ErrSessionTooLarge
+
 func setChunkedCookies(config *config.Config, rw http.ResponseWriter, cookieName string, cookieValue string) {
-	cookieChunks := utils.ChunkString(cookieValue, 3072)
+	cookieChunks := utils.ChunkString(cookieValue, sessionCookieChunkSize)
+
+	// Defensive: never emit more headers than a reader will accept back. Callers are
+	// expected to reject an oversized ticket via ErrSessionTooLarge before getting here,
+	// because a truncated cookie is unusable rather than merely inconvenient.
+	if len(cookieChunks) > MaxSessionCookieChunks {
+		cookieChunks = cookieChunks[:MaxSessionCookieChunks]
+	}
 
 	baseCookie := createSessionCookie(config)
 	baseCookie.Name = cookieName
@@ -42,6 +69,7 @@ func setChunkedCookies(config *config.Config, rw http.ResponseWriter, cookieName
 func readChunkedCookie(req *http.Request, cookieName string) (string, error) {
 	chunkCount, err := getChunkedCookieCount(req, cookieName)
 	if err != nil {
+		// Fail closed: a chunk count we refuse to trust is never turned into a loop.
 		return "", err
 	}
 
@@ -81,7 +109,14 @@ func getChunkedCookieCount(req *http.Request, cookieName string) (int, error) {
 
 	chunkCount, err := strconv.Atoi(chunksCookie.Value)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("invalid chunk count cookie %s: %w", chunksCookie.Name, err)
+	}
+
+	// The count comes straight off the wire, so it is untrusted input: bounds-check
+	// it before any caller uses it as a loop bound or header multiplier.
+	if chunkCount < 0 || chunkCount > MaxSessionCookieChunks {
+		return 0, fmt.Errorf("chunk count cookie %s out of range: %d (allowed 0-%d)",
+			chunksCookie.Name, chunkCount, MaxSessionCookieChunks)
 	}
 
 	return chunkCount, nil
@@ -89,15 +124,15 @@ func getChunkedCookieCount(req *http.Request, cookieName string) (int, error) {
 
 func clearChunkedCookie(config *config.Config, rw http.ResponseWriter, req *http.Request, cookieName string) error {
 	chunkCount, err := getChunkedCookieCount(req, cookieName)
-	if err != nil {
-		return err
-	}
 
 	baseCookie := createSessionCookie(config)
 	baseCookie.Name = cookieName
 	baseCookie.Value = ""
 	makeCookieExpireImmediately(baseCookie)
 
+	// An unreadable or hostile chunk count is treated as "no chunks": we still expire
+	// the base cookie and the count cookie (a bounded two headers) so a rejected
+	// session does not linger, and never widen the loop below with untrusted input.
 	if chunkCount == 0 {
 		http.SetCookie(rw, baseCookie)
 	} else {
@@ -111,19 +146,35 @@ func clearChunkedCookie(config *config.Config, rw http.ResponseWriter, req *http
 		}
 	}
 
-	return nil
+	return err
 }
 
+// parseCookieSameSite maps a configured value to a SameSite mode. Unrecognised
+// values fall back to Lax: never to SameSiteDefaultMode, which serialises to no
+// SameSite attribute at all and silently relies on the browser default.
 func parseCookieSameSite(sameSite string) http.SameSite {
+	mode, err := parseCookieSameSiteChecked(sameSite)
+	if err != nil {
+		return http.SameSiteLaxMode
+	}
+	return mode
+}
+
+// parseCookieSameSiteChecked is parseCookieSameSite plus a descriptive error for
+// unknown values, so callers that can log can surface the misconfiguration.
+func parseCookieSameSiteChecked(sameSite string) (http.SameSite, error) {
 	switch sameSite {
 	case "none":
-		return http.SameSiteNoneMode
+		return http.SameSiteNoneMode, nil
 	case "lax":
-		return http.SameSiteLaxMode
+		return http.SameSiteLaxMode, nil
 	case "strict":
-		return http.SameSiteStrictMode
+		return http.SameSiteStrictMode, nil
+	case "", "default":
+		// Historically accepted: empty config means "let Go decide".
+		return http.SameSiteDefaultMode, nil
 	default:
-		return http.SameSiteDefaultMode
+		return http.SameSiteLaxMode, fmt.Errorf("unknown session cookie same_site value %q, expected one of none, lax, strict", sameSite)
 	}
 }
 
@@ -153,6 +204,11 @@ func makeCookieName(config *config.Config, name string) string {
 // Emits expire Set-Cookie for Hostname() and host-only (empty Domain).
 // Note: net/http rejects Domain values that include a port, so old builds that passed url.Host with a port
 // never actually persisted that Domain — those cookies were host-only and are covered by Domain="".
+// maxLegacyCookiesToExpire bounds how many request-supplied legacy PKCE cookie
+// names we will echo back as expired Set-Cookie headers, so an oversized Cookie
+// header cannot be amplified into a large response.
+const maxLegacyCookiesToExpire = 32
+
 func clearLegacyCodeVerifierCookies(config *config.Config, rw http.ResponseWriter, req *http.Request, callbackURL *url.URL) {
 	if callbackURL == nil {
 		return
@@ -186,14 +242,29 @@ func clearLegacyCodeVerifierCookies(config *config.Config, rw http.ResponseWrite
 	}
 
 	expireVariants(prefix)
+	expired := 0
 	for _, c := range req.Cookies() {
+		if expired >= maxLegacyCookiesToExpire {
+			break
+		}
 		if c.Name == prefix || strings.HasPrefix(c.Name, prefix+".") {
 			expireVariants(c.Name)
+			expired++
 		}
 	}
 }
 
 const loginCsrfMaxAge = 600
+
+// csrfCookieSecure mirrors the session cookie's Secure flag. Fails closed (true)
+// when the session cookie config is absent, so a misconfigured deployment never
+// downgrades the CSRF cookie to plaintext.
+func csrfCookieSecure(config *config.Config) bool {
+	if config == nil || config.SessionCookie == nil {
+		return true
+	}
+	return config.SessionCookie.Secure
+}
 
 func setLoginCsrfCookie(config *config.Config, rw http.ResponseWriter, callbackURL *url.URL, csrf string) {
 	if callbackURL == nil || csrf == "" {
@@ -203,7 +274,7 @@ func setLoginCsrfCookie(config *config.Config, rw http.ResponseWriter, callbackU
 		Name:     getLoginCsrfCookieName(config, csrf),
 		Value:    csrf,
 		MaxAge:   loginCsrfMaxAge,
-		Secure:   true,
+		Secure:   csrfCookieSecure(config),
 		HttpOnly: true,
 		Path:     callbackURL.Path,
 		Domain:   "", // host-only, same as session cookie default
@@ -218,7 +289,7 @@ func clearLoginCsrfCookie(config *config.Config, rw http.ResponseWriter, callbac
 	http.SetCookie(rw, makeCookieExpireImmediately(&http.Cookie{
 		Name:     getLoginCsrfCookieName(config, csrf),
 		Value:    "",
-		Secure:   true,
+		Secure:   csrfCookieSecure(config),
 		HttpOnly: true,
 		Path:     callbackURL.Path,
 		Domain:   "",

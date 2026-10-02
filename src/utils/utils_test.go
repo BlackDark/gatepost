@@ -1,6 +1,9 @@
 package utils
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -318,5 +321,174 @@ func TestIsHtmlRequest(t *testing.T) {
 	req, _ = http.NewRequest(http.MethodGet, "/", nil)
 	if IsHtmlRequest(req) {
 		t.Fail()
+	}
+}
+
+const testSecret32 = "0123456789abcdef0123456789abcdef"
+
+func TestEncryptDecryptRoundTrip(t *testing.T) {
+	plaintext := "hello world, this is a fairly long value to span blocks"
+
+	encrypted, err := Encrypt(plaintext, testSecret32)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decrypted, err := Decrypt(encrypted, testSecret32)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if decrypted != plaintext {
+		t.Fatalf("expected %q, got %q", plaintext, decrypted)
+	}
+}
+
+func TestDecryptRejectsShortCiphertextWithoutPanic(t *testing.T) {
+	// Regression: these payloads used to panic with a slice-bounds error.
+	// Input is fully attacker controlled (session cookie / ?state=).
+	tests := []struct {
+		name       string
+		ciphertext string
+	}{
+		{"single byte", base64.StdEncoding.EncodeToString([]byte{0x01})},
+		{"nonce minus one", base64.StdEncoding.EncodeToString(make([]byte, 11))},
+		{"exactly nonce size", base64.StdEncoding.EncodeToString(make([]byte, 12))},
+		{"empty decoded bytes", base64.StdEncoding.EncodeToString([]byte{})},
+		{"QQ==", "QQ=="},
+		{"AAAA", "AAAA"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("Decrypt panicked: %v", r)
+				}
+			}()
+
+			if _, err := Decrypt(tc.ciphertext, testSecret32); err == nil {
+				t.Fatal("expected an error for a truncated ciphertext")
+			}
+		})
+	}
+}
+
+func TestDecryptErrorCases(t *testing.T) {
+	tests := []struct {
+		name       string
+		ciphertext string
+		secret     string
+	}{
+		{"empty string", "", testSecret32},
+		{"not base64", "!!!not base64!!!", testSecret32},
+		{"invalid key size", base64.StdEncoding.EncodeToString(make([]byte, 64)), "tooshort"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Decrypt(tc.ciphertext, tc.secret); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}
+
+func TestDecryptWithWrongSecretFails(t *testing.T) {
+	encrypted, err := Encrypt("payload", testSecret32)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Decrypt(encrypted, "fedcba9876543210fedcba9876543210"); err == nil {
+		t.Fatal("expected decryption with a wrong secret to fail")
+	}
+}
+
+func TestEncryptWithPurposeRoundTrip(t *testing.T) {
+	purposes := []string{PurposeOidcState, PurposeSession, "", "custom-purpose"}
+
+	for _, purpose := range purposes {
+		t.Run(purpose, func(t *testing.T) {
+			encrypted, err := EncryptWithPurpose("payload-"+purpose, testSecret32, purpose)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			decrypted, err := DecryptWithPurpose(encrypted, testSecret32, purpose)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if decrypted != "payload-"+purpose {
+				t.Fatalf("round-trip mismatch: got %q", decrypted)
+			}
+		})
+	}
+}
+
+func TestDecryptWithPurposeRejectsWrongPurpose(t *testing.T) {
+	encrypted, err := EncryptWithPurpose("state-payload", testSecret32, PurposeOidcState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A session cookie submitted as ?state= (or vice versa) must not decrypt.
+	if _, err := DecryptWithPurpose(encrypted, testSecret32, PurposeSession); err == nil {
+		t.Fatal("expected decryption with the wrong purpose to fail")
+	}
+
+	if _, err := DecryptWithPurpose(encrypted, testSecret32, ""); err == nil {
+		t.Fatal("expected decryption without a purpose to fail")
+	}
+}
+
+func TestLegacyWrappersAreInteroperableWithPurposeEmpty(t *testing.T) {
+	fromLegacy, err := Encrypt("cross-compat", testSecret32)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := DecryptWithPurpose(fromLegacy, testSecret32, ""); err != nil || got != "cross-compat" {
+		t.Fatalf("legacy ciphertext not readable by empty-purpose variant: %q %v", got, err)
+	}
+
+	fromPurpose, err := EncryptWithPurpose("cross-compat", testSecret32, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := Decrypt(fromPurpose, testSecret32); err != nil || got != "cross-compat" {
+		t.Fatalf("empty-purpose ciphertext not readable by legacy variant: %q %v", got, err)
+	}
+}
+
+func TestLegacyEncryptIsByteIdenticalToNilAadGCM(t *testing.T) {
+	// The wrappers must keep the historical on-the-wire format so values
+	// written by an older version keep decrypting after an upgrade.
+	block, err := aes.NewCipher([]byte(testSecret32))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	for i := range nonce {
+		nonce[i] = byte(i)
+	}
+
+	legacy := base64.StdEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte("legacy-format"), nil))
+
+	got, err := Decrypt(legacy, testSecret32)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got != "legacy-format" {
+		t.Fatalf("expected legacy-format, got %q", got)
 	}
 }

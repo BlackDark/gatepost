@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"text/template"
 
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/errorPages"
@@ -60,6 +61,32 @@ type Config struct {
 	// Additional query parameters to send to the IDP's authorization endpoint, eg. acr_values or prompt.
 	// A `prompt` query parameter on the incoming /login request still takes precedence over this.
 	AuthorizationParams map[string]string `json:"authorization_params"`
+
+	// AuthorizationParamsOverridable lists the AuthorizationParams keys an incoming request is
+	// allowed to override. Every key not listed here is pinned to the operator's value, because
+	// an overridable key is a key an attacker can downgrade (eg. ?acr_values=loa1 against a
+	// configured aal2). Empty - the default - pins all of them.
+	AuthorizationParamsOverridable []string `json:"authorization_params_overridable"`
+
+	// TrustedProxies lists CIDR ranges of reverse proxies in front of Traefik whose
+	// X-Forwarded-Proto / X-Forwarded-Host headers may be trusted when building absolute URLs
+	// and the redirect_uri sent to the IDP. Empty - the default - trusts none of them, which
+	// keeps the plugin fail-closed when Traefik is reachable directly.
+	TrustedProxies []string `json:"trusted_proxies"`
+
+	// TrustedProxyNets is the parsed form of TrustedProxies, filled in by src.New. It is not
+	// part of the operator-facing config surface.
+	TrustedProxyNets []*net.IPNet `json:"-"`
+
+	// MaxSessionLifetimeSeconds bounds the total lifetime of a session, independent of activity.
+	// Sessions are stateless, so nothing else can terminate one: a stolen cookie keeps refreshing
+	// for as long as the IDP honours the refresh token. 0 disables the bound and logs a warning
+	// at startup, because an unbounded session cannot be revoked without changing the secret.
+	MaxSessionLifetimeSeconds int `json:"max_session_lifetime_seconds"`
+
+	// SessionIdleTimeoutSeconds bounds the gap between two accepted requests on the same session.
+	// 0 disables the idle bound.
+	SessionIdleTimeoutSeconds int `json:"session_idle_timeout_seconds"`
 }
 
 type ProviderConfig struct {
@@ -102,6 +129,22 @@ type ProviderConfig struct {
 
 	// TokenClockSkewSeconds is leeway for JWT nbf/exp validation (issue #236). Default 60.
 	TokenClockSkewSeconds int `json:"token_clock_skew_seconds"`
+
+	// RevokeTokensOnLogout posts the refresh token to the IDP's revocation endpoint on
+	// user-initiated logout, so a stolen cookie or refresh token cannot outlive the session.
+	// Default true. Silently skipped when the IDP advertises no revocation_endpoint.
+	RevokeTokensOnLogout     string `json:"revoke_tokens_on_logout"`
+	RevokeTokensOnLogoutBool bool   `json:"revoke_tokens_on_logout_bool"`
+
+	// MaxAuthAgeSeconds makes the challenge behaviour a real step-up: it sends max_age on the
+	// authorization request and requires the resulting ID token to carry an auth_time claim
+	// that recent. Without it an IDP session silently re-authorizes, so a route advertised as
+	// requiring fresh authentication accepts an authentication from hours ago. 0 disables it.
+	MaxAuthAgeSeconds int `json:"max_auth_age_seconds"`
+
+	// OidcTimeoutSeconds bounds every outbound call to the IDP (discovery, token, JWKS,
+	// introspection, userinfo). Without it a hung IDP pins a request goroutine forever.
+	OidcTimeoutSeconds int `json:"oidc_timeout_seconds"`
 }
 
 type SessionCookieConfig struct {

@@ -164,7 +164,31 @@ func ParseInt(s string) (int, error) {
 	return int(v.Int64()), nil
 }
 
+// Purposes for purpose-bound (AAD) encryption. Binding the purpose into the
+// GCM additional authenticated data prevents a value sealed for one context
+// (e.g. the session cookie) from being replayed into another (e.g. the ?state=
+// callback parameter) and silently decrypting to a zero-valued struct.
+const (
+	PurposeOidcState = "oidc-state"
+	PurposeSession   = "session"
+)
+
+// additionalDataForPurpose keeps the legacy (empty purpose) ciphertext
+// byte-identical to what GCM produces with a nil AAD, so existing callers that
+// still use Encrypt/Decrypt can decrypt values produced by older versions.
+func additionalDataForPurpose(purpose string) []byte {
+	if purpose == "" {
+		return nil
+	}
+
+	return []byte(purpose)
+}
+
 func Encrypt(plaintext string, secret string) (string, error) {
+	return EncryptWithPurpose(plaintext, secret, "")
+}
+
+func EncryptWithPurpose(plaintext string, secret string, purpose string) (string, error) {
 	aesCipher, err := aes.NewCipher([]byte(secret))
 	if err != nil {
 		return "", err
@@ -186,12 +210,16 @@ func Encrypt(plaintext string, secret string) (string, error) {
 	// ciphertext here is actually nonce+ciphertext
 	// So that when we decrypt, just knowing the nonce size
 	// is enough to separate it from the ciphertext.
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), additionalDataForPurpose(purpose))
 
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
 func Decrypt(ciphertext string, secret string) (string, error) {
+	return DecryptWithPurpose(ciphertext, secret, "")
+}
+
+func DecryptWithPurpose(ciphertext string, secret string, purpose string) (string, error) {
 	if ciphertext == "" {
 		return "", errors.New("ciphertext must not be an empty string")
 	}
@@ -200,8 +228,6 @@ func Decrypt(ciphertext string, secret string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	ciphertext = string(cipherbytes)
 
 	aesCipher, err := aes.NewCipher([]byte(secret))
 	if err != nil {
@@ -215,10 +241,17 @@ func Decrypt(ciphertext string, secret string) (string, error) {
 
 	// Since we know the ciphertext is actually nonce+ciphertext
 	// And len(nonce) == NonceSize(). We can separate the two.
+	// The input is fully attacker-controlled (session cookie, ?state= callback
+	// parameter), so the length must be validated before slicing: a short input
+	// used to panic here and take down the whole Traefik process.
 	nonceSize := gcm.NonceSize()
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	if len(cipherbytes) < nonceSize {
+		return "", fmt.Errorf("invalid ciphertext: got %d bytes, need at least %d bytes for the nonce", len(cipherbytes), nonceSize)
+	}
 
-	plaintext, err := gcm.Open(nil, []byte(nonce), []byte(ciphertext), nil)
+	nonce, sealed := cipherbytes[:nonceSize], cipherbytes[nonceSize:]
+
+	plaintext, err := gcm.Open(nil, nonce, sealed, additionalDataForPurpose(purpose))
 	if err != nil {
 		return "", err
 	}

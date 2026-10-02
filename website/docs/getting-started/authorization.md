@@ -87,6 +87,14 @@ So instead of `name: "my:zitadel:grants"`, use `name: "['my:zitadel:grants']"`.
 If the user is not authorized, all claims, contained in the token, are printed in the console if the [`logLevel`](./middleware-configuration.md) is set to `DEBUG`. This may help you to know which claims exist in your token.
 :::
 
+:::note
+Authorization rules are per-middleware, not per-route. To apply a different `assertClaims` set — or a different audience — to a single route, declare a second middleware with its own configuration and attach that to the route. There is no per-route config key for this. See [Per-route audience](./middleware-configuration.md#per-route-audience).
+:::
+
+:::warning
+Sending a user back through the IDP (`unauthorizedBehavior: Challenge`) does **not** by itself force a fresh authentication — if the user still has a live SSO session at the IDP, the redirect returns immediately with the old one. Set [`provider.maxAuthAgeSeconds`](./middleware-configuration.md#step-up-authentication) to require a recent `auth_time` claim on the challenge, otherwise a route that claims to require fresh authentication can be satisfied by an authentication from hours ago. The freshness check applies **only** to the challenge; a plain login is unaffected.
+:::
+
 ### When is authorization checked?
 
 By default, `assertClaims` is only evaluated **once**, when the user logs in and the session is created. For every subsequent request on that session, the previously computed result is simply reused - it is *not* re-evaluated, even if the underlying claims would now produce a different result (e.g. after a silent token refresh). Set [`checkOnEveryRequest`](./middleware-configuration.md#authorization) to `true` if you need the assertion to be re-evaluated on every request - for example when you're checking an `acr`/`amr` claim to enforce step-up authentication for specific routes, or when the required claims could change without the user going through a full login again. When using [`authorizationHeader`](./middleware-configuration.md#authorization-header) or [`authorizationCookie`](./middleware-configuration.md#authorization-cookie), this is always treated as `true`, since there is no persistent session to cache the result in.
