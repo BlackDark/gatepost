@@ -37,6 +37,15 @@ func (storage *CookieSessionStorage) StoreSession(logger *logging.Logger, config
 		return "", err
 	}
 
+	// A ticket over the cookie budget would be truncated on the way out and could never be
+	// read back, which presents as a silent re-login loop with nothing useful in the log.
+	// Fail here with a message an operator can act on instead: the usual cause is an IDP
+	// returning an oversized claim set (group overages, a fat userinfo response).
+	if len(encryptedSessionTicket) > MaxTicketSize {
+		logger.Log(logging.LevelError, "Session state is %d bytes, over the %d byte cookie limit. Reduce what is stored in the session (assert_claims, scopes) or the IDP's claim size.", len(encryptedSessionTicket), MaxTicketSize)
+		return "", ErrSessionTooLarge
+	}
+
 	return encryptedSessionTicket, nil
 }
 

@@ -96,5 +96,9 @@ Both will do the same.
 :::
 
 :::note
-Logout clears the session cookie in **that browser** only. Because sessions are stateless there is no server-side session to terminate, so other browsers holding the same cookie keep working until `max_session_lifetime_seconds` elapses. With `provider.revokeTokensOnLogout` enabled (default) the refresh token is also revoked at the IDP. See [Security Considerations](./security-considerations.md).
+A login in progress expires after **10 minutes**. The `state` parameter is sealed with a signed expiry, so a login that sits idle on the IDP's consent screen for longer than that must be restarted. Anyone still holding that callback URL afterwards gets a failed login, not a new session.
+:::
+
+:::note
+Logout clears the session cookie in **that browser** only. Because sessions are stateless there is no server-side session to terminate, so other browsers holding the same cookie keep working until `max_session_lifetime_seconds` elapses. With [`revoke_tokens_on_logout`](./middleware-configuration.md#provider) enabled (default) the refresh token of that session is also revoked at the IDP. See [Security Considerations](./security-considerations.md).
 :::

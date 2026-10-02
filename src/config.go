@@ -333,10 +333,33 @@ func New(uctx context.Context, next http.Handler, cfg *config.Config, name strin
 		}
 	}
 
-	for _, header := range cfg.Headers {
+	for index := range cfg.Headers {
+		header := &cfg.Headers[index]
+
 		if header.Value != "" && header.Values != "" {
 			logger.Log(logging.LevelError, "Invalid Header: you can only use one of Value or Values, not both")
 			return nil, errors.New("invalid Header")
+		}
+
+		// Compile here rather than on the first request. Doing it lazily would mutate a shared
+		// config element from every concurrent request that arrives before the cache is warm,
+		// which is a data race on the *template.Template pointer and inside text/template.
+		if header.Value != "" {
+			tpl, err := newTemplate().Parse(header.Value)
+			if err != nil {
+				logger.Log(logging.LevelError, "Invalid template in header %q: %s", header.Name, err.Error())
+				return nil, fmt.Errorf("invalid template in header %q: %w", header.Name, err)
+			}
+
+			header.Template = tpl
+		} else if header.Values != "" {
+			tpl, err := newTemplate().Parse(header.Values)
+			if err != nil {
+				logger.Log(logging.LevelError, "Invalid template in header %q: %s", header.Name, err.Error())
+				return nil, fmt.Errorf("invalid template in header %q: %w", header.Name, err)
+			}
+
+			header.Template = tpl
 		}
 	}
 

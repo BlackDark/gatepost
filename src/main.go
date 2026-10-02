@@ -46,6 +46,11 @@ var clientIdentityHeaders = []string{
 	"X-Auth-Request-Preferred-Username",
 	"Remote-User",
 	"Remote-Groups",
+	// Token-bearing identity headers: backends that trust these treat them as proof of
+	// authentication, so an unauthenticated request must not be able to supply them.
+	"X-Auth-Request-Access-Token",
+	"X-Auth-Request-Token",
+	"X-Forwarded-Access-Token",
 }
 
 type TraefikOidcAuth struct {
@@ -665,17 +670,21 @@ func (toa *TraefikOidcAuth) attachHeaders(req *http.Request, session *session.Se
 			}
 
 			if header.Value != "" {
-				if header.Template == nil {
-					tpl, err := newTemplate().Parse(header.Value)
+				// The template is compiled once in New(). Caching it lazily here would mean
+				// every concurrent first request writing the same shared config element, so
+				// a nil template can only mean a header added after construction.
+				tpl := header.Template
+				if tpl == nil {
+					parsed, err := newTemplate().Parse(header.Value)
 					if err != nil {
 						return err
 					}
 
-					header.Template = tpl
+					tpl = parsed
 				}
 
 				var renderedValue bytes.Buffer
-				err := header.Template.Execute(&renderedValue, evalContext)
+				err := tpl.Execute(&renderedValue, evalContext)
 
 				if err == nil {
 					req.Header.Set(header.Name, renderedValue.String())
@@ -683,17 +692,18 @@ func (toa *TraefikOidcAuth) attachHeaders(req *http.Request, session *session.Se
 					req.Header.Set(header.Name, err.Error())
 				}
 			} else if header.Values != "" {
-				if header.Template == nil {
-					tpl, err := newTemplate().Parse(header.Values)
+				tpl := header.Template
+				if tpl == nil {
+					parsed, err := newTemplate().Parse(header.Values)
 					if err != nil {
 						return err
 					}
 
-					header.Template = tpl
+					tpl = parsed
 				}
 
 				var renderedValue bytes.Buffer
-				err := header.Template.Execute(&renderedValue, evalContext)
+				err := tpl.Execute(&renderedValue, evalContext)
 				if err != nil {
 					req.Header.Set(header.Name, err.Error())
 				}

@@ -191,6 +191,42 @@ func TestUnsealState_LegacyFallbackCannotBypassExpiry(t *testing.T) {
 	}
 }
 
+// TestUnsealState_LegacyFallbackRejectsSessionShapedCiphertext pins the positive
+// shape check in openState. A legacy (purpose-less) *session* cookie has no "typ"
+// and no "expires", so it slips past the denylist checks - but it is not a login
+// state and must not be accepted as one.
+func TestUnsealState_LegacyFallbackRejectsSessionShapedCiphertext(t *testing.T) {
+	// Shape taken verbatim from session.SessionState's wire tags.
+	sessionJson := `{"id":"a-session-id","access_token":"an-access-token",` +
+		`"id_token":"an-id-token","refresh_token":"a-refresh-token",` +
+		`"is_authorized":true,"token_expires_in":3600,` +
+		`"created_at":"2026-01-01T00:00:00Z","session_created_at":"2026-01-01T00:00:00Z",` +
+		`"last_used_at":"2026-01-01T00:00:00Z"}`
+
+	sealed, err := utils.Encrypt(sessionJson, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := UnsealState(base64.RawURLEncoding.EncodeToString([]byte(sealed)), testSecret)
+	if err == nil {
+		t.Fatalf("a legacy session cookie must not be accepted as an OIDC state, got %+v", state)
+	}
+}
+
+func TestUnsealState_LegacyFallbackRejectsEmptyAction(t *testing.T) {
+	// A non-empty action is the positive shape requirement; an empty one is not a
+	// login state and must be refused by the fallback.
+	sealed, err := utils.Encrypt(`{"action":"","redirect_url":"https://app.example.com/"}`, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UnsealState(base64.RawURLEncoding.EncodeToString([]byte(sealed)), testSecret); err == nil {
+		t.Fatal("a purpose-less ciphertext with an empty action must be rejected")
+	}
+}
+
 func mustMarshal(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)

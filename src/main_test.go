@@ -2,6 +2,7 @@ package src
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -1223,10 +1224,13 @@ func TestHandleLogout_RevokesRefreshTokenAndSurvivesFailure(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// item 7: the header-template cache has to stick
+// item 7 + N1: header templates are compiled once, at config time, never lazily
+// on a request. Compiling them lazily mutated the shared Config element from every
+// concurrent first request, which is a data race on the *template.Template pointer
+// and inside text/template itself.
 // -----------------------------------------------------------------------------
 
-func TestAttachHeaders_ParsesTemplateOnlyOnce(t *testing.T) {
+func TestAttachHeaders_DoesNotMutateSharedConfig(t *testing.T) {
 	toa := newAuthBehaviorTestAuth(t)
 	toa.Config.Headers = []config.HeaderConfig{
 		{Name: "X-User", Value: "{{ .claims.sub }}", IncludeWhen: "Always"},
@@ -1247,10 +1251,54 @@ func TestAttachHeaders_ParsesTemplateOnlyOnce(t *testing.T) {
 		}
 	}
 
+	// Rendering must never write back into the shared config slice.
 	for index := range toa.Config.Headers {
-		if toa.Config.Headers[index].Template == nil {
-			t.Fatalf("header %d template was not cached in the shared config", index)
+		if toa.Config.Headers[index].Template != nil {
+			t.Fatalf("header %d cached a template during request handling; New() owns compilation", index)
 		}
+	}
+}
+
+// TestAttachHeaders_ConcurrentDoesNotRace is the regression guard for the data race
+// the request-time template cache introduced. Run under -race it fails loudly if
+// attachHeaders ever mutates shared state again.
+func TestAttachHeaders_ConcurrentDoesNotRace(t *testing.T) {
+	toa := newAuthBehaviorTestAuth(t)
+	toa.Config.Headers = []config.HeaderConfig{
+		{Name: "X-User", Value: "{{ .claims.sub }}", IncludeWhen: "Always"},
+		{Name: "X-Groups", Values: `{{ .claims.groups | mapToJsonArray }}`, IncludeWhen: "Always"},
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				req := httptest.NewRequest(http.MethodGet, "https://app.example.com/secret", nil)
+				if err := toa.attachHeaders(req, &session.SessionState{}, map[string]interface{}{
+					"sub":    "user-123",
+					"groups": []string{"a", "b"},
+				}, false, true); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestNew_RejectsInvalidHeaderTemplate(t *testing.T) {
+	// A malformed template must fail at construction, not silently degrade per request.
+	cfg := CreateConfig()
+	cfg.Secret = "0123456789abcdef0123456789abcdef"
+	cfg.Provider.Url = "https://idp.example.com"
+	cfg.Provider.ClientId = "client"
+	cfg.Headers = []config.HeaderConfig{{Name: "X-User", Value: "{{ .claims.sub ", IncludeWhen: "Always"}}
+
+	if _, err := New(context.Background(), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), cfg, "test"); err == nil {
+		t.Fatal("expected New to reject a malformed header template")
 	}
 }
 

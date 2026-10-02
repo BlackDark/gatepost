@@ -162,20 +162,38 @@ func (p *predicateParser) evaluateExpr(n ast.Expr) (interface{}, error) {
 	}
 }
 
-// evaluateSelector recursively evaluates the selector field and returns a list
-// of properties at the end.
+// evaluateSelector walks a selector expression and returns its field names as
+// a dotted path, in source order.
+//
+// The walk is iterative and the field list is assembled in one pass on purpose.
+// The previous recursive version prepended the accumulated slice at every level
+// of the descent, which is O(depth^2) in both allocations and bytes copied: a
+// user-authored rule of the form "a.a.a...b" burned ~16s of CPU at 60k levels
+// and ~32s at 80k, so a single config value was enough to exhaust CPU. Callers
+// have to parse user-authored rule expressions, so the walk must stay linear.
 func evaluateSelector(sel *ast.SelectorExpr, fields []string) ([]string, error) {
-	fields = append([]string{sel.Sel.Name}, fields...)
-	switch l := sel.X.(type) {
-	case *ast.SelectorExpr:
-		return evaluateSelector(l, fields)
+	names := make([]string, 0, 8)
 
-	case *ast.Ident:
-		fields = append([]string{l.Name}, fields...)
-		return fields, nil
+	for {
+		names = append(names, sel.Sel.Name)
 
-	default:
-		return nil, fmt.Errorf("unsupported selector type: %T", l)
+		switch l := sel.X.(type) {
+		case *ast.SelectorExpr:
+			// Descend one level; names is collected innermost-last and flipped
+			// into source order once the base identifier is reached.
+			sel = l
+
+		case *ast.Ident:
+			out := make([]string, 0, len(names)+1+len(fields))
+			out = append(out, l.Name)
+			for i := len(names) - 1; i >= 0; i-- {
+				out = append(out, names[i])
+			}
+			return append(out, fields...), nil
+
+		default:
+			return nil, fmt.Errorf("unsupported selector type: %T", l)
+		}
 	}
 }
 

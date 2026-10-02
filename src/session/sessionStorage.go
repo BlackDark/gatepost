@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -8,6 +9,24 @@ import (
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
 )
+
+const (
+	// ChunkSize is the payload size of a single chunk cookie.
+	ChunkSize = 3072
+	// MaxChunks bounds how many chunk cookies exist for one session. Without a bound,
+	// a single unauthenticated request carrying an attacker-chosen
+	// "<name>.Chunks=2000000000" cookie makes the middleware emit (or iterate) billions
+	// of Set-Cookie headers, exhausting memory in the proxy.
+	MaxChunks = 32
+	// MaxTicketSize is the largest encrypted ticket that can be stored.
+	MaxTicketSize = ChunkSize * MaxChunks
+)
+
+// ErrSessionTooLarge means the sealed session ticket does not fit the cookie budget. It is
+// an operator-actionable claim-size or configuration problem, not a transient failure: the
+// alternative, truncating, produces a cookie that can never be decrypted again and shows up
+// as a silent, permanent re-login loop.
+var ErrSessionTooLarge = errors.New("session state exceeds the maximum cookie size")
 
 type SessionStorage interface {
 	StoreSession(logger *logging.Logger, config *config.Config, sessionId string, state *SessionState) (string, error)

@@ -147,6 +147,20 @@ func openState(encBytes []byte, secret string) (string, bool, error) {
 		}
 	}
 
+	// Positive shape check, not just the absence of typ/expires: a purpose-less
+	// *session* cookie ({"id":...,"access_token":...}) would otherwise pass the
+	// denylist above and be accepted as an empty state. Every sealed state carries a
+	// non-empty action.
+	action, ok := probe["action"]
+	if !ok {
+		return "", false, err
+	}
+
+	var actionValue string
+	if json.Unmarshal(action, &actionValue) != nil || actionValue == "" {
+		return "", false, err
+	}
+
 	logging.CreateLogger(logging.LevelWarn).Log(
 		logging.LevelWarn,
 		"Accepted a legacy purpose-less OIDC state. Sessions established before the upgrade will expire; remove this fallback once all instances have been restarted.",

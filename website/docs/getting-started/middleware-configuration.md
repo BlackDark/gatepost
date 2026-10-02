@@ -25,6 +25,19 @@ If you're upgrading from a pre-split config (legacy single `unauthorizedBehavior
 Redirect URI wildcards (including a bare `*`) now require explicitly setting `TOA_ENABLE_REDIRECT_URI_WILDCARDS=true` on the Traefik process. Without it, all allowlist entries are matched exactly, as required by OIDC/OAuth2. See [Redirect URI Wildcards](#redirect-uri-wildcards).
 :::
 
+:::danger Upgrading behind an ingress — set `trusted_proxies`
+Absolute URLs built from the request — the `redirect_uri` sent to the IDP above all — now ignore `X-Forwarded-Proto` and `X-Forwarded-Host` unless the request arrived from a proxy in [`trusted_proxies`](#trusted-proxies). The default list is **empty**, i.e. trust nothing.
+
+If Traefik is behind an ingress, load balancer or CDN, you **must** add that hop's CIDR or your callbacks break with a `redirect_uri` mismatch. See [Trusted Proxies](#trusted-proxies).
+:::
+
+:::warning Other behaviour changes on upgrade
+- Session cookies sealed before this version are still accepted through a narrow legacy fallback and re-sealed with the new purpose on the next renewal. The fallback will be removed in a later release, after which every session must be re-established through a fresh login.
+- The OIDC `state` parameter now expires after **10 minutes**. A login left idle at the IDP for longer must be restarted.
+- Front-channel logout now requires `sid` **or** `id_token_hint`; `iss` alone is rejected. See [Front-Channel Logout](#front-channel-logout).
+- `provider.verification_token` and `session_storage_type` are rejected at startup when invalid instead of failing at request time.
+:::
+
 :::caution
 It is highly recommended to change the default encryption-secret by providing your own 32-character secret using the `secret`-option.
 You can generate a random one here: https://it-tools.tech/token-generator?length=32
@@ -64,7 +77,7 @@ provider:
 | `postLoginRedirectUri`* | no | `string` | *none* | An optional static redirect url where the user should be redirected after login. By default the user will be redirected to the url which triggered the login-flow. |
 | `validPostLoginRedirectUris` | no | `string[]` | *none* | Allowed redirect URIs for the login endpoint's *redirect_uri* query parameter. Entries match exactly unless wildcard support is explicitly enabled. See [Redirect URI Wildcards](#redirect-uri-wildcards). |
 | `logoutUri`* | no | `string` | `/logout` | The url which should trigger the logout-flow. See [here](./how-it-works.md#logout) for more details. |
-| `frontChannelLogoutUri`* | no | `string` | `/frontchannel-logout` | Endpoint for [OIDC Front-Channel Logout](https://openid.net/specs/openid-connect-frontchannel-1_0.html). Requires a matching `iss` query parameter (and optional `sid`) before clearing the session. |
+| `frontChannelLogoutUri`* | no | `string` | `/frontchannel-logout` | Endpoint for [OIDC Front-Channel Logout](https://openid.net/specs/openid-connect-frontchannel-1_0.html). Requires a matching `iss` query parameter **and** either a matching `sid` or a matching `id_token_hint` before clearing the session. See [Front-Channel Logout](#front-channel-logout). |
 | `postLogoutRedirectUri`* | no | `string` | `/` | The url where the user should be redirected after logout. |
 | `validPostLogoutRedirectUris` | no | `string[]` | *none* | Allowed redirect URIs for the logout endpoint's *redirect_uri* query parameter. Entries match exactly unless wildcard support is explicitly enabled. See [Redirect URI Wildcards](#redirect-uri-wildcards). |
 | `cookieNamePrefix`* | no | `string` | `TraefikOidcAuth` | Specifies the prefix for all cookies used internally by the plugin. The final names are concatenated using dot-notation. Eg. `TraefikOidcAuth.Session`, `TraefikOidcAuth.CodeVerifier` etc. Please note that this prefix does not apply to *AuthorizationCookie* where the name can be set individually. |
@@ -78,7 +91,7 @@ provider:
 | `bypassAuthenticationRule`* | no | `string` | *none* | Specifies an optional rule to bypass authentication. See [Bypass Authentication Rule](./bypass-authentication-rule.md) for more details. |
 | `errorPages` | no | [`errorPages`](#error-pages) | *none* | Allows you to customize some error pages. See *ErrorPages* block. |
 | `requestedResources` | no | `string[]`| *none* | An array of resource URIs according to [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) for which the token should be requested. | 
-| `authorizationParams` | no | `map[string]string`| *none* | Additional query parameters to send to the IDP's authorization endpoint, eg. `acr_values` to request a specific authentication context (step-up authentication) or a default `prompt`. Reserved protocol parameters (`response_type`, `client_id`, `redirect_uri`, `state`, `scope`, `resource`) cannot be overridden this way and are ignored with a warning. A `prompt` query parameter on the incoming `/login` request still takes precedence over the configured value. |
+| `authorizationParams` | no | `map[string]string`| *none* | Additional query parameters to send to the IDP's authorization endpoint, eg. `acr_values` to request a specific authentication context (step-up authentication) or a default `prompt`. Reserved protocol parameters (`response_type`, `client_id`, `redirect_uri`, `state`, `scope`, `resource`, `code_challenge`, `code_challenge_method`, `nonce`) are always set by the plugin and are **rejected at startup** if you list them here. A `prompt` query parameter on the incoming `/login` request only takes precedence over the configured value if `prompt` is listed in [`authorization_params_overridable`](#overridable-authorization-params). |
 | `authorization_params_overridable` | no | `string[]` | *none* (nothing overridable) | Which `authorizationParams` keys an incoming request may override via query parameter. **Anything not listed here is pinned to your value.** See [Overridable Authorization Params](#overridable-authorization-params). |
 | `trusted_proxies` | no | `string[]` (CIDR) | *none* (trust none) | CIDR ranges of reverse proxies in front of Traefik whose `X-Forwarded-Proto` / `X-Forwarded-Host` may be trusted. See [Trusted Proxies](#trusted-proxies). |
 | `max_session_lifetime_seconds` | no | `int` | `0` (unbounded, warns at startup) | Hard upper bound on the total lifetime of a session. See [Session Lifetime Bounds](#session-lifetime-bounds). |
@@ -95,7 +108,17 @@ Sessions in this plugin are **stateless**. The whole session — tokens, claims,
 | Maximum total session lifetime | `max_session_lifetime_seconds` | `int` | `0` = unbounded (logs a warning at startup) |
 | Maximum idle time per session | `session_idle_timeout_seconds` | `int` | `0` = disabled |
 
-Because sessions are stateless and therefore **cannot be revoked** without changing the `secret`, `max_session_lifetime_seconds` is the only hard bound you have. A captured session cookie stays usable — and keeps refreshing — until the bound elapses. When it does, the next request forces the user through a fresh authentication at the IDP. Negative values are rejected at startup.
+Because sessions are stateless and therefore **cannot be revoked** without changing the `secret`, `max_session_lifetime_seconds` is the only hard bound you have. A captured session cookie stays usable — and keeps refreshing — until the bound elapses. When it does, the next request is treated as unauthenticated: the cookie is cleared and the usual `unauthenticatedBehavior` applies (a re-challenge for HTML requests, a `401` otherwise). Negative values are rejected at startup.
+
+The idle bound is durable but not exact. The stored `last used` timestamp only survives when the session ticket is rewritten, and the ticket is rewritten at most once per quarter of the idle bound (capped at 60s) rather than on literally every request, to avoid a `Set-Cookie` per request. A session can therefore outlive `session_idle_timeout_seconds` by at most that one refresh interval, never indefinitely.
+
+:::info
+A session cookie sealed before these bounds existed carries no creation timestamp. The plugin backfills one from the session's last-used time rather than rejecting the cookie, so upgrading does not log every user out at once. Such a session is then bounded from that backfilled point, not from its true login time.
+:::
+
+:::caution
+Both bounds only apply to sessions in the session cookie. A request authenticated by an external `authorizationHeader` / `authorizationCookie` is a per-request pseudo-session and is never bounded or renewed.
+:::
 
 ```yml
 traefik-oidc-auth:
@@ -140,6 +163,12 @@ List ranges, never `0.0.0.0/0`. Anyone who can reach Traefik directly can then c
 
 Entries are parsed as CIDR ranges and an unparseable entry fails the whole middleware at startup. Like most string options in this plugin, each entry supports `${}` environment variables.
 
+:::caution
+This gate applies to **every** absolute URL the plugin builds from the request, not only the `redirect_uri`: the post-login and post-logout redirect targets, the `loginUri` / `logoutUri` links on the error pages, and the scheme/host comparison used to decide whether an inbound request is the OAuth callback. A relative `postLoginRedirectUri` behind an untrusted ingress is therefore redirected to the wrong host too.
+:::
+
+An `X-Forwarded-Proto` value that is not one of `http`, `https`, `ws`, `wss` is ignored with a `WARN` and the scheme falls back to `https` (TLS) or `http`. Only the first entry of a comma-separated forwarded header is used — the hop closest to the client.
+
 
 ### Overridable Authorization Params {#overridable-authorization-params}
 
@@ -160,8 +189,28 @@ traefik-oidc-auth:
 
 Here `acr_values` stays `aal2` for everyone, while `prompt` can be set per request, e.g. `/login?prompt=login`.
 
+The reserved protocol parameters (`response_type`, `client_id`, `redirect_uri`, `state`, `scope`, `resource`, `code_challenge`, `code_challenge_method`, `nonce`) are always set by the plugin, cannot be overridden from a request, and are rejected at startup if you try to configure them in `authorizationParams`.
+
 :::warning
 Adding `acr_values` or `prompt` to this list is a downgrade risk: `?acr_values=loa1` would weaken an authentication context you configured as `aal2`, and `?prompt=none` lets an existing IDP session satisfy a login without any user interaction. Only make a key overridable if you are willing to accept whatever the weakest client sends.
+:::
+
+
+### Front-Channel Logout {#front-channel-logout}
+
+`frontChannelLogoutUri` implements [OpenID Connect Front-Channel Logout 1.0](https://openid.net/specs/openid-connect-frontchannel-1_0.html): the IDP loads a URL in the user's browser (usually in a hidden iframe) and that request clears the session cookie in **that browser**. It reaches one browser, not all of them, and it only works while the user still has the IDP session.
+
+The notification is only honoured when it carries **both** of:
+
+- `iss` — matching the session's `iss` claim, and additionally matching the expected issuer when `validateIssuer` is on.
+- **either** `sid` matching the session's `sid` claim, **or** `id_token_hint` matching the session's ID token.
+
+`iss` on its own is rejected. It is identical for every user of the provider, so accepting it would let any unauthenticated `GET` — an `<img>` tag, an iframe on a hostile page — log an arbitrary visitor out. This matches the spec, which requires one of `sid` / `id_token_hint`. A rejected notification returns `400` and **leaves the session cookie in place**.
+
+If the session is present and the notification is valid, the session's refresh token is also revoked (see [`revoke_tokens_on_logout`](#provider)) before the cookie is cleared; a revocation failure is logged at `WARN` and the logout still completes. A request to the endpoint with **no** session at all is answered as a successful no-op, so an IDP retrying the notification does not produce errors.
+
+:::note
+Back-channel (IDP-initiated, server-to-server `POST`) logout is **not** supported and cannot be: the session lives in a browser cookie that an inbound `POST` cannot reach. See [Security Considerations](./security-considerations.md#idp-initiated-back-channel-logout-is-not-supported).
 :::
 
 
@@ -235,7 +284,7 @@ With wildcards enabled:
 | `clientSecret`* | no | `string` | *none* | The client secret of the application. May not be needed for some providers when using PKCE. |
 | `clientJwtPrivateKeyId`* | no | `string` | *none* | Specifies the key id (`keyId` field in the downloaded file) of a [JWT Profile](https://zitadel.com/docs/guides/integrate/token-introspection/private-key-jwt). Only works with ZITADEL. Note: This is a little bit experimental and not well tested yet. |
 | `clientJwtPrivateKey`* | no | `string` | *none* | Specifies the private key (`key` field in the downloaded file) of a [JWT Profile](https://zitadel.com/docs/guides/integrate/token-introspection/private-key-jwt). Only works with ZITADEL. Note: This is a little bit experimental and not well tested yet. |
-| `usePkce`* | no | `bool` | `false`| Enable PKCE. In this case, a client secret may not be needed for some providers. The following algorithms are supported: *RS*, *EC*, *ES*. |
+| `usePkce`* | no | `bool` | `true`| Enable PKCE. In this case, a client secret may not be needed for some providers. The following algorithms are supported: *RS*, *EC*, *ES*. |
 | `validateIssuer`* | no | `bool` | `true` | Specifies whether the `iss` claim in the JWT-token should be validated. |
 | `validIssuer`* | no | `string` | *discovery document* | The issuer which must be present in the JWT-token. By default this will be read from the OIDC discovery document. |
 | `validateAudience`* | no | `bool` | `true` | Specifies whether the `aud` claim in the JWT-token should be validated. |
@@ -243,7 +292,7 @@ With wildcards enabled:
 | `tokenValidation`* | no | `string` | `IdToken` | Specifies which token or method should be used to validate the authentication cookie. Can be either `AccessToken`, `IdToken` or `Introspection`. Any other value is rejected at startup rather than failing every login. `Introspection` may not work when using PKCE. |
 | `useClaimsFromUserInfo`* | no | `bool` | `false` | When enabled, an additional request to the provider's `userinfo_endpoint` is made to validate the token and to retrieve additional claims. The userinfo claims are merged directly into the token claims, with userinfo values overriding token values for non-security-critical claims. |
 | `tokenRenewalThreshold` | no | `float` | `0.75` | The percentage of the token's lifetime after which it should be renewed before expiration. The value must be between 0.5 and 1.0. |
-| `revoke_tokens_on_logout`* | no | `bool` | `true` | On user-initiated logout, POST the refresh token to the IDP's `revocation_endpoint` so neither the cookie nor the refresh token can be replayed afterwards. **Silently skipped when the IDP's discovery document advertises no `revocation_endpoint`** — check your provider before relying on it. Does not affect front-channel logout of other sessions. See [Security Considerations](./security-considerations.md). |
+| `revoke_tokens_on_logout`* | no | `bool` | `true` | On user-initiated logout — and on a front-channel logout notification for the same session — POST the refresh token to the IDP's `revocation_endpoint` so neither the cookie nor the refresh token can be replayed afterwards. **Silently skipped when the IDP's discovery document advertises no `revocation_endpoint`, or when the session holds no refresh token** — check your provider before relying on it. A failing revocation endpoint is logged at `WARN` and the logout completes anyway. It only revokes *that* session's refresh token; other browsers holding a copy of the same cookie keep working. See [Security Considerations](./security-considerations.md). |
 | `max_auth_age_seconds` | no | `int` | `0` (disabled) | Turns `Challenge` into a real step-up authentication: sends `max_age` on the authorization request and requires the resulting ID token to carry an `auth_time` claim that recent. See [Step-Up Authentication](#step-up-authentication). |
 | `oidc_timeout_seconds` | no | `int` | `30` | Bounds **every** outbound call to the IDP — discovery, token, JWKS, introspection and userinfo. Without a client-side timeout a hung IDP pins the request goroutine indefinitely, and because discovery and JWKS loads happen under a lock one slow dependency stalls every router behind that Traefik instance. A value below `0` is reset to the default of `30`; `0` is also treated as the default. |
 
@@ -275,6 +324,10 @@ When `checkOnEveryRequest` is enabled, this will greatly increase the hit rate o
 :::
 
 :::info
+`max_age` is only sent on the **challenge** authorization request. A plain login triggered by `unauthenticatedBehavior: Challenge` or `Auto` is unaffected, and so is every renewal of an existing session. If your IDP returns an ID token without an `auth_time` claim, the step-up login is **rejected** (fail-closed) rather than accepted.
+:::
+
+:::info
 **Claims Merging Behavior**: When `useClaimsFromUserInfo` is enabled, claims from the userinfo endpoint are merged directly into the token claims. Security-critical JWT claims (`iss`, `aud`, `exp`, `iat`, `nbf`, `jti`, `azp`) are protected and cannot be overwritten by userinfo data. All other claims from userinfo will override corresponding token claims, allowing you to access updated profile information directly via `{{ .claims.* }}` templates.
 :::
 
@@ -286,7 +339,7 @@ When `checkOnEveryRequest` is enabled, this will greatly increase the hit rate o
 | `domain` | no | `string` | *none* | An optional domain to which the cookie should be assigned to. See [Callback URLs](./callback-uri.md) for examples. |
 | `secure` | no | `bool` | `true` | Whether the cookie should be marked secure. |
 | `httpOnly` | no | `bool` | `true` | Whether the cookie should be marked http-only. |
-| `sameSite` | no | `string` | `default` | Can be one of `default`, `none`, `lax`, `strict`. |
+| `sameSite` | no | `string` | `lax` | Can be one of `default` (let Go decide), `none`, `lax`, `strict`. Any other value is rejected at startup. |
 | `maxAge` | no | `int` | `0` | Cookie time-to-live in seconds.  0 (default) is a ephemeral session cookie. |
 
 ## AuthorizationHeader Block {#authorization-header}

@@ -12,6 +12,10 @@ If configured as a relative URL (by default, `/oidc/callback`), then the plugin 
 
 When authentication is needed, whatever host the user is accessing will be used as the callback URL for the redirect to the identity provider.
 
+:::warning
+The scheme and host come from the request, and `X-Forwarded-Proto` / `X-Forwarded-Host` are **ignored** unless that request arrived from a proxy listed in [`trusted_proxies`](./middleware-configuration.md#trusted-proxies). If Traefik sits behind an ingress or load balancer, configure `trusted_proxies` or the callback URL is built with the wrong scheme/host and the IDP rejects the callback.
+:::
+
 When the plugin is protecting only one hostname, this is zero-configuration.
 
 If you protect many different hostnames using the plugin, it's likely desirable to use an identity provider with dynamic callback URL patterns, or to instead use the plugin in absolute URL mode.
@@ -21,6 +25,10 @@ If you protect many different hostnames using the plugin, it's likely desirable 
 If `callbackUri` is an absolute URL with a protocol scheme and a hostname, for example `https://login.example.com/oidc/callback`, then the plugin will only intercept calls to that path and hostname, and, that URL will always be used as the callback URL for the redirect to the identity provider.
 
 This will likely greatly simplify your identity provider configuration.
+
+:::tip
+An absolute `callbackUri` is the robust choice behind an ingress: it is not derived from the request at all, so `trusted_proxies` cannot get it wrong.
+:::
 
 Of course you must pick an absolute URL where the plugin will receive the traffic.
 

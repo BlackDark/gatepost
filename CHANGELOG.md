@@ -14,7 +14,124 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Security
+
+- Introspection responses now honour the `active` flag; an inactive token no
+  longer validates just because it is well-formed and unexpired.
+- Front-channel logout now requires `sid` **or** `id_token_hint` in addition to
+  a matching `iss`. `iss` alone is identical for every user of the provider, so
+  accepting it made forced-logout CSRF trivial: any unauthenticated `GET` — an
+  `<img>` tag on a hostile page — could log an arbitrary visitor out. A rejected
+  notification returns `400` and no longer clears the session.
+- Client-supplied identity headers (`X-Forwarded-User`, `X-Forwarded-Email`,
+  `Remote-User`, `X-Auth-Request-*`, ...) are stripped unconditionally and
+  re-set from the session, so a request taking the bypass, `Forward`, or
+  public path can no longer claim to be any user.
+- Well-known identity headers set by a sibling proxy are re-applied from the
+  verified session, closing the reverse of the stripping above.
+- The auth-rule expression evaluator no longer scales quadratically with nesting
+  depth. `evaluateSelector` in `src/predicate/parse.go` recursed once per nesting
+  level and re-walked its children at every level, so a selector nested 60k deep
+  — which a `bypass` or `unauthorized` rule will happily attempt to parse,
+  since the expression comes from the operator's own configuration rather than
+  from the request — burned roughly 16s of CPU in a single request. The
+  evaluator is now an iterative single walk: the same input parses in ~10ms.
+
+### Upgrading
+
+Three rounds of security fixes have landed together in this release. The
+behaviour changes a user will actually observe, and the config key that
+preserves the old behaviour, are:
+
+- **Forwarded headers are only honoured from a proxy you declare.** The
+  `redirect_uri` sent to the IDP, and every other absolute URL built from the
+  request (post-login and post-logout redirect targets, the `loginUri` /
+  `logoutUri` links on the error pages, and the scheme/host check that decides
+  whether an inbound request is the OAuth callback), are now derived from the
+  request itself unless the peer is in `trusted_proxies`. Previously
+  `X-Forwarded-Proto` and `X-Forwarded-Host` were trusted unconditionally.
+  Set `trusted_proxies` to the CIDR of the ingress / load balancer in front of
+  Traefik. **There is no key that restores unconditional trust** — an empty
+  `trusted_proxies` is the fail-closed default, which is correct when Traefik
+  is reachable directly.
+- **BREAKING CHANGE: sessions are purpose-bound, with a legacy fallback.**
+  Session cookies are now sealed with the `session` purpose bound into the
+  AEAD, so a ciphertext minted for another purpose can no longer be read as a
+  session. Session cookies sealed before this version are still accepted
+  through a narrow fallback — and only there — logged at `INFO`, and are
+  re-sealed with the session purpose on the next renewal, so a rolling upgrade
+  does not log everyone out at once. Because the fallback re-seals rather than
+  rejecting, each pre-upgrade session clears the window on its first renewal
+  and is then indistinguishable from a newly established one. The fallback
+  itself lives in the code, not in instance state, so it survives a restart;
+  it will be removed in a later release, after which every session must be
+  re-established through a fresh login. No config key controls this.
+- **BREAKING CHANGE: the OIDC `state` parameter expires after 10 minutes.** The
+  sealed state carries a signed issue/expiry pair, so a captured callback URL
+  cannot be replayed indefinitely. A login that is left idle on the IDP's
+  consent screen for more than 10 minutes must be restarted by the user. States
+  sealed before this version carry no expiry and are accepted through the same
+  legacy fallback, logged at `WARN`; that fallback refuses any ciphertext that
+  *does* carry an expiry or type tag, so it cannot be used to skip the check.
+  No config key controls this.
+- **BREAKING CHANGE: front-channel logout requires `sid` or `id_token_hint`.**
+  A notification carrying only `iss` is now rejected with `400` and leaves the
+  session intact. IdPs that send only `iss` will not be able to log users out
+  through this endpoint.
+- **BREAKING CHANGE: invalid enum values fail at startup.**
+  `provider.verification_token` (anything other than `AccessToken`, `IdToken`,
+  `Introspection`) and `session_storage_type` (anything other than `Cookie`) now
+  abort the middleware's `New()` instead of failing every login at request
+  time. A config copied from a fork that supports other values will refuse to
+  start; remove the key. Set `session_storage_type: "Cookie"` explicitly if the
+  key must be present.
+
+### Added
+
+- `max_session_lifetime_seconds` — hard upper bound on total session lifetime.
+  `0` (default) disables it and logs a `WARN` at startup.
+- `session_idle_timeout_seconds` — bound on the gap between accepted requests on
+  one session. `0` (default) disables it. The durable timestamp is refreshed at
+  most once per quarter of the bound (capped at 60s) rather than on every
+  request, so a session can exceed it by at most one refresh interval.
+- `trusted_proxies` — CIDR ranges of proxies whose `X-Forwarded-Proto` /
+  `X-Forwarded-Host` may be trusted. Empty by default (trust nothing). An
+  unparseable entry fails the middleware at startup.
+- `authorization_params_overridable` — allowlist of `authorizationParams` keys an
+  incoming request may override via query parameter. Empty by default, which
+  pins every configured value, including `prompt`.
+- `provider.max_auth_age_seconds` — makes `unauthorizedBehavior: Challenge` a
+  real step-up by sending `max_age` and requiring a recent `auth_time` claim. A
+  missing `auth_time` is treated as a failure.
+- `provider.oidc_timeout_seconds` — client-side timeout bounding every outbound
+  IDP call. Default `30`; `0` and negative values resolve to the default.
+- `provider.revoke_tokens_on_logout` (default `true`) — revokes the session's
+  refresh token at the IDP's `revocation_endpoint` on user-initiated logout and
+  on front-channel logout. Silently skipped when no endpoint is advertised.
+- Route matching is anchored: a configured route matches exactly or below itself
+  with a trailing slash, never as a bare path prefix.
+
+### Fixed
+
+- Header templates are compiled once in `New` instead of lazily on first use per
+  request, which was a data race on the shared config: two concurrent requests
+  both entered the uninitialised cache and both wrote it. A malformed template
+  now also aborts `New` with a descriptive error instead of failing every
+  request after a successful startup.
+- A session that does not fit the cookie budget is now rejected with
+  `ErrSessionTooLarge` and an actionable `ERROR` log naming the size and the
+  limit. Previously the ticket was silently truncated to 32 chunks, producing a
+  cookie that could never be decrypted again — visible to the user only as a
+  permanent re-login loop, with nothing in the log to explain it. The usual
+  cause is an oversized claim set from the IDP; reduce `assert_claims`, the
+  requested scopes, or the claims the IDP returns.
+- The legacy purpose-less `state` fallback no longer accepts a session cookie as
+  a login state. A ciphertext sealed without an AEAD purpose has to be opened
+  some other way during a rolling upgrade, but the shape it must have is now
+  checked positively (a non-empty `action`) rather than only by the absence of
+  the fields a real state would carry. A purpose-less ciphertext shaped like a
+  session — `{"id": ..., "access_token": ..., "is_authorized": true}` — was
+  previously unsealed into an empty state object and passed on to the callback.
 
 ## [v0.22.0] - 2026-08-02
 

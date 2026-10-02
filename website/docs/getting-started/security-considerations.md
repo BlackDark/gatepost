@@ -30,6 +30,11 @@ Plan accordingly:
 - Set [`session_idle_timeout_seconds`](./middleware-configuration.md#session-lifetime-bounds) alongside it if you want abandoned sessions to die quickly.
 - Keep [`revoke_tokens_on_logout`](./middleware-configuration.md#provider) at its default `true`, so the refresh token dies with the browser that logs out, at least when your IDP supports revocation.
 
+Two limits on the lifetime bounds, so you do not size them on a promise the code cannot keep:
+
+- They only cover sessions in the **session cookie**. A request authenticated by an external `authorizationHeader` / `authorizationCookie` is a per-request pseudo-session and is neither bounded nor renewed.
+- The **idle** bound is enforced against a durable timestamp that is refreshed at most once per quarter of the bound (capped at 60s) rather than on every request, so a session can exceed it by up to that one interval. The **total** lifetime bound is exact.
+
 :::warning
 If you need "disable this user right now, everywhere", this plugin cannot do it. Short session lifetimes plus IDP-side revocation of the user's sessions are the tools available to you.
 :::
@@ -47,6 +52,8 @@ What this means in practice:
 - Session lifetime bounds the exposure window. Choose it deliberately.
 
 [Front-channel logout](https://openid.net/specs/openid-connect-frontchannel-1_0.html) *is* supported through `frontChannelLogoutUri` — the IDP loads a URL in the user's browser, which can then clear that browser's cookie. It reaches one browser, not all of them, and it requires the user to still have the IDP session.
+
+A front-channel notification is only honoured when it carries a matching `iss` **and** either a matching `sid` or a matching `id_token_hint`. Accepting `iss` alone would make forced-logout CSRF trivial: `iss` is the same string for every user of the provider, so a single unauthenticated `GET` — an `<img>` tag on any page — would log any visitor out. A rejected notification returns `400` and leaves the cookie in place. See [Front-Channel Logout](./middleware-configuration.md#front-channel-logout).
 
 ### Claim changes at the IDP take effect only when the session is re-established
 

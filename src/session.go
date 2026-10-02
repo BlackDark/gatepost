@@ -275,7 +275,9 @@ func (toa *TraefikOidcAuth) storeSessionAndAttachCookie(session *session.Session
 	sessionTicket, err := toa.SessionStorage.StoreSession(toa.logger, toa.Config, session.Id, session)
 	if err != nil {
 		toa.logger.Log(logging.LevelError, "Failed to store session: %s", err.Error())
-		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		// Do not echo err.Error(): ErrSessionTooLarge and marshal failures describe
+		// internal limits and configuration, which is not the caller's business.
+		http.Error(rw, "Failed to store session", http.StatusInternalServerError)
 		return
 	}
 

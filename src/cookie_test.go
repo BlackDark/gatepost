@@ -1,6 +1,7 @@
 package src
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
+	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
 )
 
 func TestSetChunkedCookiesNonChunked(t *testing.T) {
@@ -323,9 +326,9 @@ func TestGetChunkedCookieCount(t *testing.T) {
 		{name: "zero", chunks: "0", wantCount: 0},
 		{name: "one", chunks: "1", wantCount: 1},
 		{name: "two", chunks: "2", wantCount: 2},
-		{name: "max", chunks: strconv.Itoa(maxSessionCookieChunks), wantCount: maxSessionCookieChunks},
+		{name: "max", chunks: strconv.Itoa(MaxSessionCookieChunks), wantCount: MaxSessionCookieChunks},
 		{name: "negative", chunks: "-1", wantErr: true},
-		{name: "over max", chunks: strconv.Itoa(maxSessionCookieChunks + 1), wantErr: true},
+		{name: "over max", chunks: strconv.Itoa(MaxSessionCookieChunks + 1), wantErr: true},
 		{name: "hostile huge", chunks: "2000000000", wantErr: true},
 		{name: "not a number", chunks: "abc", wantErr: true},
 	}
@@ -361,7 +364,7 @@ func TestClearChunkedCookieHostileChunkCountIsBounded(t *testing.T) {
 	cfg := testCookieConfig()
 	const name = "TraefikOidcAuth.Session"
 
-	for _, hostile := range []string{"2000000000", strconv.Itoa(maxSessionCookieChunks + 1), "-1", "abc"} {
+	for _, hostile := range []string{"2000000000", strconv.Itoa(MaxSessionCookieChunks + 1), "-1", "abc"} {
 		t.Run(hostile, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://app.example.com/", nil)
 			req.AddCookie(&http.Cookie{Name: name + ".Chunks", Value: hostile})
@@ -382,7 +385,7 @@ func TestClearChunkedCookieMaxChunks(t *testing.T) {
 	const name = "TraefikOidcAuth.Session"
 
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/", nil)
-	req.AddCookie(&http.Cookie{Name: name + ".Chunks", Value: strconv.Itoa(maxSessionCookieChunks)})
+	req.AddCookie(&http.Cookie{Name: name + ".Chunks", Value: strconv.Itoa(MaxSessionCookieChunks)})
 
 	rw := newMockResponseWriter()
 	if err := clearChunkedCookie(cfg, rw, req, name); err != nil {
@@ -390,7 +393,7 @@ func TestClearChunkedCookieMaxChunks(t *testing.T) {
 	}
 
 	// Chunks header + one expiry per chunk.
-	if got, want := len(rw.HeaderMap.Values("Set-Cookie")), maxSessionCookieChunks+1; got != want {
+	if got, want := len(rw.HeaderMap.Values("Set-Cookie")), MaxSessionCookieChunks+1; got != want {
 		t.Fatalf("emitted %d Set-Cookie headers, want %d", got, want)
 	}
 	for _, raw := range rw.HeaderMap.Values("Set-Cookie") {
@@ -477,21 +480,139 @@ func TestReadChunkedCookieRejectsHostileCount(t *testing.T) {
 	}
 }
 
-func TestSetChunkedCookiesClampsEmittedChunks(t *testing.T) {
+// TestSetChunkedCookiesClampsEmittedChunksToReadableBound keeps the bound on the
+// number of emitted headers, but no longer treats the clamped value as usable:
+// what is asserted is that whatever setChunkedCookies emits is READABLE BACK by
+// readChunkedCookie for any value the caller is allowed to store (i.e. anything
+// within MaxTicketSize). The clamping path is a last-resort guard, not a
+// truncation strategy: session.ErrSessionTooLarge rejects an oversized ticket
+// upstream, so this test's job is only to prove the clamp can never itself
+// produce a cookie whose own .Chunks header disagrees with the chunks emitted.
+func TestSetChunkedCookiesClampsEmittedChunksToReadableBound(t *testing.T) {
 	cfg := testCookieConfig()
 	name := getSessionCookieName(cfg)
-	want := randomFixedLengthString(sessionCookieChunkSize * (maxSessionCookieChunks + 5))
+
+	t.Run("within budget round-trips exactly", func(t *testing.T) {
+		want := randomFixedLengthString(MaxSessionCookieChunks * sessionCookieChunkSize)
+
+		rw := newMockResponseWriter()
+		setChunkedCookies(cfg, rw, name, want)
+
+		headers := rw.HeaderMap.Values("Set-Cookie")
+		if got, wantN := len(headers), MaxSessionCookieChunks+1; got != wantN {
+			t.Fatalf("emitted %d Set-Cookie headers, want %d", got, wantN)
+		}
+		if headers[0] != fmt.Sprintf("%s.Chunks=%d; Path=/; HttpOnly; Secure; SameSite=Lax", name, MaxSessionCookieChunks) {
+			t.Fatalf("unexpected chunks header: %s", headers[0])
+		}
+
+		got := readBackChunkedCookie(t, headers, name)
+		if got != want {
+			t.Fatalf("round-trip mismatch: got %d bytes, want %d", len(got), len(want))
+		}
+	})
+
+	t.Run("oversized value stays internally consistent", func(t *testing.T) {
+		// The caller should have rejected this already (ErrSessionTooLarge). If it
+		// reaches setChunkedCookies anyway, the emitted .Chunks header and the
+		// emitted chunk cookies must still agree, so readChunkedCookie returns
+		// cleanly-truncated data rather than erroring.
+		want := randomFixedLengthString(sessionCookieChunkSize * (MaxSessionCookieChunks + 5))
+
+		rw := newMockResponseWriter()
+		setChunkedCookies(cfg, rw, name, want)
+
+		headers := rw.HeaderMap.Values("Set-Cookie")
+		if got, wantN := len(headers), MaxSessionCookieChunks+1; got != wantN {
+			t.Fatalf("emitted %d Set-Cookie headers, want %d", got, wantN)
+		}
+
+		got := readBackChunkedCookie(t, headers, name)
+		if got != want[:sessionCookieChunkSize*MaxSessionCookieChunks] {
+			t.Fatalf("clamped value is not a consistent prefix: got %d bytes, want %d",
+				len(got), sessionCookieChunkSize*MaxSessionCookieChunks)
+		}
+		if len(got) > MaxSessionCookieSize {
+			t.Fatalf("clamped value of %d bytes still exceeds the storeable budget %d", len(got), MaxSessionCookieSize)
+		}
+	})
+}
+
+// TestStoreAndEmitSessionTicket_EndToEnd is the assertion that would have caught
+// the original truncation bug in the exact place it bit: an oversized session
+// ticket must be rejected by storage, so no cookie is ever emitted. Before the
+// fix the ticket was clamped into 32 chunks, emitted, and then failed to decrypt
+// on the very next request - a permanent, silent re-login loop.
+func TestStoreAndEmitSessionTicket_EndToEnd(t *testing.T) {
+	cfg := testCookieConfig()
+	cfg.Secret = "0123456789abcdef0123456789abcdef"
+	name := getSessionCookieName(cfg)
+	storage := session.CreateCookieSessionStorage()
+	logger := logging.CreateLogger(logging.LevelDebug)
+
+	// Comfortably over the cookie budget once serialized and encrypted.
+	oversized := &session.SessionState{
+		Id:           "e2e-session",
+		AccessToken:  randomFixedLengthString(MaxSessionCookieSize + 4096),
+		IdToken:      randomFixedLengthString(MaxSessionCookieSize + 4096),
+		IsAuthorized: true,
+	}
 
 	rw := newMockResponseWriter()
-	setChunkedCookies(cfg, rw, name, want)
+	ticket, err := storage.StoreSession(logger, cfg, oversized.Id, oversized)
+	if err == nil {
+		setChunkedCookies(cfg, rw, name, ticket)
 
-	headers := rw.HeaderMap.Values("Set-Cookie")
-	if got, wantN := len(headers), maxSessionCookieChunks+1; got != wantN {
-		t.Fatalf("emitted %d Set-Cookie headers, want %d", got, wantN)
+		headers := rw.HeaderMap.Values("Set-Cookie")
+		req := httptest.NewRequest(http.MethodGet, "https://app.example.com/", nil)
+		for _, raw := range headers {
+			c, parseErr := http.ParseSetCookie(raw)
+			if parseErr != nil {
+				t.Fatalf("parse %q: %v", raw, parseErr)
+			}
+			req.AddCookie(c)
+		}
+
+		got, readErr := readChunkedCookie(req, name)
+		if readErr == nil {
+			if _, decErr := storage.TryGetSession(logger, cfg, got); decErr == nil {
+				t.Fatal("emitted cookie must either round-trip or be rejected at store time, never decrypt into a broken session")
+			}
+		}
+		t.Fatal("oversized session was stored and emitted instead of being rejected with ErrSessionTooLarge")
 	}
-	if headers[0] != fmt.Sprintf("%s.Chunks=%d; Path=/; HttpOnly; Secure; SameSite=Lax", name, maxSessionCookieChunks) {
-		t.Fatalf("unexpected chunks header: %s", headers[0])
+	if !errors.Is(err, session.ErrSessionTooLarge) {
+		t.Fatalf("err = %v, want session.ErrSessionTooLarge", err)
 	}
+	if got := rw.HeaderMap.Values("Set-Cookie"); len(got) != 0 {
+		t.Fatalf("nothing may be emitted for a rejected session, got %v", got)
+	}
+
+	// The same session, comfortably under budget, must still work end to end.
+	ok := &session.SessionState{
+		Id:           "e2e-session-ok",
+		AccessToken:  randomFixedLengthString(2048),
+		IdToken:      randomFixedLengthString(2048),
+		IsAuthorized: true,
+	}
+	okTicket, err := storage.StoreSession(logger, cfg, ok.Id, ok)
+	if err != nil {
+		t.Fatalf("StoreSession on a normal session: %v", err)
+	}
+	setChunkedCookies(cfg, rw, name, okTicket)
+	loaded, err := storage.TryGetSession(logger, cfg, readBackChunkedCookie(t, rw.HeaderMap.Values("Set-Cookie"), name))
+	if err != nil {
+		t.Fatalf("TryGetSession after cookie round-trip: %v", err)
+	}
+	if loaded.Id != ok.Id || loaded.AccessToken != ok.AccessToken || loaded.IdToken != ok.IdToken || !loaded.IsAuthorized {
+		t.Fatalf("cookie round-trip mismatch: %+v", loaded)
+	}
+}
+
+// readBackChunkedCookie replays the emitted Set-Cookie headers onto a request and
+// reads them back with readChunkedCookie, failing the test if the read errors.
+func readBackChunkedCookie(t *testing.T, headers []string, name string) string {
+	t.Helper()
 
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/", nil)
 	for _, raw := range headers {
@@ -501,14 +622,12 @@ func TestSetChunkedCookiesClampsEmittedChunks(t *testing.T) {
 		}
 		req.AddCookie(c)
 	}
+
 	got, err := readChunkedCookie(req, name)
 	if err != nil {
-		t.Fatalf("readChunkedCookie after clamp: %v", err)
+		t.Fatalf("readChunkedCookie after emit: %v", err)
 	}
-	if got != want[:sessionCookieChunkSize*maxSessionCookieChunks] {
-		t.Fatalf("clamped round-trip mismatch: got %d bytes, want %d",
-			len(got), sessionCookieChunkSize*maxSessionCookieChunks)
-	}
+	return got
 }
 
 func TestParseCookieSameSite(t *testing.T) {

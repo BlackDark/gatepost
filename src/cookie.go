@@ -11,27 +11,37 @@ import (
 	"time"
 
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
 )
 
 const (
-	// sessionCookieChunkSize is the payload size of a single chunk cookie.
-	sessionCookieChunkSize = 3072
-	// maxSessionCookieChunks bounds how many chunk cookies the middleware will ever
+	// SessionCookieChunkSize is the payload size of a single chunk cookie.
+	SessionCookieChunkSize = session.ChunkSize
+	// MaxSessionCookieChunks bounds how many chunk cookies the middleware will ever
 	// read or emit. Without it, a single unauthenticated request carrying an
 	// attacker-chosen "<name>.Chunks=2000000000" cookie made us emit (or iterate)
-	// billions of Set-Cookie headers, exhausting memory in the proxy. 16 chunks of
-	// 3072 bytes covers ~48 KB of session state, far beyond any real session.
-	maxSessionCookieChunks = 16
+	// billions of Set-Cookie headers, exhausting memory in the proxy.
+	MaxSessionCookieChunks = session.MaxChunks
+	// MaxSessionCookieSize is the largest session ticket that can be stored.
+	MaxSessionCookieSize = session.MaxTicketSize
 )
+
+// sessionCookieChunkSize is the internal alias kept so the cookie code reads uniformly.
+const sessionCookieChunkSize = SessionCookieChunkSize
+
+// ErrSessionTooLarge is returned when an encrypted session ticket cannot fit in the
+// cookie budget.
+var ErrSessionTooLarge = session.ErrSessionTooLarge
 
 func setChunkedCookies(config *config.Config, rw http.ResponseWriter, cookieName string, cookieValue string) {
 	cookieChunks := utils.ChunkString(cookieValue, sessionCookieChunkSize)
 
-	// Defensive: never emit more headers than a reader will accept back, otherwise
-	// the session becomes unreadable and the response is an amplification vector.
-	if len(cookieChunks) > maxSessionCookieChunks {
-		cookieChunks = cookieChunks[:maxSessionCookieChunks]
+	// Defensive: never emit more headers than a reader will accept back. Callers are
+	// expected to reject an oversized ticket via ErrSessionTooLarge before getting here,
+	// because a truncated cookie is unusable rather than merely inconvenient.
+	if len(cookieChunks) > MaxSessionCookieChunks {
+		cookieChunks = cookieChunks[:MaxSessionCookieChunks]
 	}
 
 	baseCookie := createSessionCookie(config)
@@ -104,9 +114,9 @@ func getChunkedCookieCount(req *http.Request, cookieName string) (int, error) {
 
 	// The count comes straight off the wire, so it is untrusted input: bounds-check
 	// it before any caller uses it as a loop bound or header multiplier.
-	if chunkCount < 0 || chunkCount > maxSessionCookieChunks {
+	if chunkCount < 0 || chunkCount > MaxSessionCookieChunks {
 		return 0, fmt.Errorf("chunk count cookie %s out of range: %d (allowed 0-%d)",
-			chunksCookie.Name, chunkCount, maxSessionCookieChunks)
+			chunksCookie.Name, chunkCount, MaxSessionCookieChunks)
 	}
 
 	return chunkCount, nil
