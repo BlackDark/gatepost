@@ -94,3 +94,7 @@ You can also specify a different url when navigating to the `/logout` endpoint l
 `/logout?redirect_uri=/whatever` or `/logout?post_logout_redirect_uri=/whatever`.  
 Both will do the same.
 :::
+
+:::note
+Logout clears the session cookie in **that browser** only. Because sessions are stateless there is no server-side session to terminate, so other browsers holding the same cookie keep working until `max_session_lifetime_seconds` elapses. With `provider.revokeTokensOnLogout` enabled (default) the refresh token is also revoked at the IDP. See [Security Considerations](./security-considerations.md).
+:::

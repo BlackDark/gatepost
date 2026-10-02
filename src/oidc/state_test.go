@@ -2,8 +2,13 @@ package oidc
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
 )
 
 const testSecret = "0123456789abcdef0123456789abcdef"
@@ -69,6 +74,130 @@ func TestUnsealState_PlainBase64JsonFails(t *testing.T) {
 	if _, err := UnsealState(legacy, testSecret); err == nil {
 		t.Fatal("legacy unsealed state must be rejected")
 	}
+}
+
+func TestUnsealState_ExpiredRejected(t *testing.T) {
+	// A state sealed just past the lifetime must be refused, otherwise a captured
+	// callback URL replays forever.
+	expired := &OidcState{
+		Action:      "Login",
+		RedirectUrl: "https://app.example.com/",
+		Type:        stateTypeTag,
+		IssuedAt:    time.Now().Add(-2 * stateLifetime),
+		Expires:     time.Now().Add(-stateLifetime),
+	}
+
+	sealed, err := utils.EncryptWithPurpose(mustMarshal(t, expired), testSecret, utils.PurposeOidcState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = UnsealState(base64.RawURLEncoding.EncodeToString([]byte(sealed)), testSecret)
+	if !errors.Is(err, ErrStateExpired) {
+		t.Fatalf("expected ErrStateExpired, got %v", err)
+	}
+}
+
+func TestSealState_StampsTypeAndExpiry(t *testing.T) {
+	sealed, err := SealState(&OidcState{Action: "Login", RedirectUrl: "https://app.example.com/"}, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plain, err := utils.DecryptWithPurpose(string(mustRawURLDecode(t, sealed)), testSecret, utils.PurposeOidcState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var probe OidcState
+	if err := json.Unmarshal([]byte(plain), &probe); err != nil {
+		t.Fatal(err)
+	}
+
+	if probe.Type != stateTypeTag {
+		t.Fatalf("typ=%q", probe.Type)
+	}
+	if probe.IssuedAt.IsZero() || probe.Expires.IsZero() {
+		t.Fatal("issued_at/expires must be stamped")
+	}
+	if probe.Expires.Sub(probe.IssuedAt) != stateLifetime {
+		t.Fatalf("lifetime=%v", probe.Expires.Sub(probe.IssuedAt))
+	}
+}
+
+func TestUnsealState_TamperedTypeRejected(t *testing.T) {
+	forged := &OidcState{
+		Action:      "Login",
+		RedirectUrl: "https://evil.example/",
+		Type:        "session",
+		IssuedAt:    time.Now(),
+		Expires:     time.Now().Add(stateLifetime),
+	}
+
+	sealed, err := utils.EncryptWithPurpose(mustMarshal(t, forged), testSecret, utils.PurposeOidcState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UnsealState(base64.RawURLEncoding.EncodeToString([]byte(sealed)), testSecret); err == nil {
+		t.Fatal("a state tagged for another purpose must be rejected")
+	}
+}
+
+func TestUnsealState_SessionCiphertextRejectedAsState(t *testing.T) {
+	// A session cookie ciphertext submitted as ?state= must not decrypt here.
+	sessionCiphertext, err := utils.EncryptWithPurpose(`{"id":"abc"}`, testSecret, utils.PurposeSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UnsealState(base64.RawURLEncoding.EncodeToString([]byte(sessionCiphertext)), testSecret); err == nil {
+		t.Fatal("session-purpose ciphertext must not open as state")
+	}
+}
+
+func TestUnsealState_LegacyPurposeLessStateOpens(t *testing.T) {
+	legacy := &OidcState{Action: "Login", RedirectUrl: "https://app.example.com/"}
+
+	sealed, err := utils.Encrypt(mustMarshal(t, legacy), testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := UnsealState(base64.RawURLEncoding.EncodeToString([]byte(sealed)), testSecret)
+	if err != nil {
+		t.Fatalf("legacy fallback should still open in-flight logins: %v", err)
+	}
+	if out.Action != "Login" || out.RedirectUrl != legacy.RedirectUrl {
+		t.Fatalf("legacy round-trip mismatch: %+v", out)
+	}
+}
+
+func TestUnsealState_LegacyFallbackCannotBypassExpiry(t *testing.T) {
+	// The legacy fallback must not become a way to skip the expiry check.
+	forged := &OidcState{
+		Action:      "Login",
+		RedirectUrl: "https://evil.example/",
+		Expires:     time.Now().Add(time.Hour),
+	}
+
+	sealed, err := utils.Encrypt(mustMarshal(t, forged), testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UnsealState(base64.RawURLEncoding.EncodeToString([]byte(sealed)), testSecret); err == nil {
+		t.Fatal("purpose-less state carrying expiry metadata must be rejected")
+	}
+}
+
+func mustMarshal(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func mustRawURLDecode(t *testing.T, s string) []byte {

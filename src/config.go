@@ -3,14 +3,19 @@ package src
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -37,6 +42,8 @@ func CreateConfig() *config.Config {
 			TokenRenewalThreshold:     0.75,
 			UseClaimsFromUserInfoBool: false,
 			TokenClockSkewSeconds:     60,
+			RevokeTokensOnLogoutBool:  true,
+			OidcTimeoutSeconds:        30,
 		},
 		// Note: It looks like we're not allowed to specify a default value for arrays here.
 		// Maybe a traefik bug. So I've moved this to the New() method.
@@ -148,6 +155,23 @@ func New(uctx context.Context, next http.Handler, cfg *config.Config, name strin
 	cfg.Provider.CABundle = utils.ExpandEnvironmentVariableString(cfg.Provider.CABundle)
 	cfg.Provider.CABundleFile = utils.ExpandEnvironmentVariableString(cfg.Provider.CABundleFile)
 	cfg.Provider.TokenValidation = utils.ExpandEnvironmentVariableString(cfg.Provider.TokenValidation)
+	cfg.Provider.RevokeTokensOnLogout = utils.ExpandEnvironmentVariableString(cfg.Provider.RevokeTokensOnLogout)
+	cfg.Provider.RevokeTokensOnLogoutBool, err = utils.ExpandEnvironmentVariableBoolean(cfg.Provider.RevokeTokensOnLogout, cfg.Provider.RevokeTokensOnLogoutBool)
+	if err != nil {
+		return nil, err
+	}
+	for _, proxy := range cfg.TrustedProxies {
+		proxy = utils.ExpandEnvironmentVariableString(proxy)
+		if proxy == "" {
+			continue
+		}
+		_, network, err := net.ParseCIDR(proxy)
+		if err != nil {
+			logger.Log(logging.LevelError, "Invalid trustedProxies entry %q: %s", proxy, err.Error())
+			return nil, fmt.Errorf("invalid trustedProxies entry %q: %w", proxy, err)
+		}
+		cfg.TrustedProxyNets = append(cfg.TrustedProxyNets, network)
+	}
 
 	cfg.ErrorPages.Unauthenticated.FilePath = utils.ExpandEnvironmentVariableString(cfg.ErrorPages.Unauthenticated.FilePath)
 	cfg.ErrorPages.Unauthenticated.RedirectTo = utils.ExpandEnvironmentVariableString(cfg.ErrorPages.Unauthenticated.RedirectTo)
@@ -200,6 +224,67 @@ func New(uctx context.Context, next http.Handler, cfg *config.Config, name strin
 	if cfg.Provider.TokenRenewalThreshold < 0.5 || cfg.Provider.TokenRenewalThreshold > 1.0 {
 		logger.Log(logging.LevelError, "Invalid TokenRenewalThreshold. The value must be >= 0.5 and <= 1.0.")
 		return nil, errors.New("invalid TokenRenewalThreshold")
+	}
+
+	// Reject an unusable verification_token here instead of letting every single login callback
+	// hit the default branch of the switch in handleCallback.
+	switch cfg.Provider.TokenValidation {
+	case "AccessToken", "IdToken", "Introspection":
+	default:
+		logger.Log(logging.LevelError, "Invalid provider.verification_token %q. Must be one of AccessToken, IdToken, Introspection.", cfg.Provider.TokenValidation)
+		return nil, fmt.Errorf("invalid provider.verification_token %q", cfg.Provider.TokenValidation)
+	}
+
+	// sessionStorageType is accepted for compatibility with configurations copied from other
+	// forks, but only the cookie store exists. Silently ignoring it would give an operator who
+	// asked for shared state an intermittent 401 loop across replicas instead.
+	switch cfg.SessionStorageType {
+	case "", config.SessionStorageTypeCookie:
+	default:
+		logger.Log(logging.LevelError, "Invalid session_storage_type %q. Only %q is supported.", cfg.SessionStorageType, config.SessionStorageTypeCookie)
+		return nil, fmt.Errorf("invalid session_storage_type %q", cfg.SessionStorageType)
+	}
+
+	for name, value := range map[string]int{
+		"max_session_lifetime_seconds":  cfg.MaxSessionLifetimeSeconds,
+		"session_idle_timeout_seconds":  cfg.SessionIdleTimeoutSeconds,
+		"provider.max_auth_age_seconds": cfg.Provider.MaxAuthAgeSeconds,
+	} {
+		if value < 0 {
+			logger.Log(logging.LevelError, "Invalid %s %d. Must be >= 0 (0 disables the bound).", name, value)
+			return nil, fmt.Errorf("invalid %s", name)
+		}
+	}
+
+	if cfg.Provider.OidcTimeoutSeconds < 0 {
+		cfg.Provider.OidcTimeoutSeconds = 30
+	}
+	if cfg.Provider.OidcTimeoutSeconds == 0 {
+		cfg.Provider.OidcTimeoutSeconds = 30
+	}
+
+	if cfg.MaxSessionLifetimeSeconds == 0 {
+		logger.Log(logging.LevelWarn, "maxSessionLifetimeSeconds is not set: sessions are stateless, so a captured session cookie can be refreshed forever and cannot be revoked without changing the secret. Set maxSessionLifetimeSeconds to bound it.")
+	}
+
+	// An empty prefix would produce a cookie literally named ".Session", and a shared prefix
+	// makes two middlewares on one domain overwrite each other's session cookie.
+	if cfg.CookieNamePrefix == "" {
+		sum := sha256.Sum256([]byte(cfg.Provider.ClientId))
+		cfg.CookieNamePrefix = fmt.Sprintf("TraefikOidcAuth.%s", hex.EncodeToString(sum[:4]))
+		logger.Log(logging.LevelInfo, "cookieNamePrefix is empty, derived %q from the clientId so this instance gets its own session cookie.", cfg.CookieNamePrefix)
+	}
+
+	if _, err := parseCookieSameSiteChecked(cfg.SessionCookie.SameSite); err != nil {
+		logger.Log(logging.LevelError, "Invalid sessionCookie.sameSite %q: %s", cfg.SessionCookie.SameSite, err.Error())
+		return nil, err
+	}
+
+	for key := range cfg.AuthorizationParams {
+		if reservedAuthorizationParams[key] {
+			logger.Log(logging.LevelError, "authorizationParams contains the reserved key %q, which is always set by the plugin.", key)
+			return nil, fmt.Errorf("reserved authorizationParams key %q", key)
+		}
 	}
 
 	var conditionalAuth *rules.RequestCondition
@@ -272,17 +357,23 @@ func New(uctx context.Context, next http.Handler, cfg *config.Config, name strin
 	}
 
 	httpTransport := &http.Transport{
-		// MaxIdleConns:    10,
-		// IdleConnTimeout: 30 * time.Second,
 		Proxy: http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: cfg.Provider.InsecureSkipVerifyBool,
 			RootCAs:            rootCAs,
 		},
+		MaxIdleConns:          10,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 	}
 
+	// Without a client-side timeout a hung IDP pins the request goroutine forever, and because
+	// discovery and JWKS loads happen under a lock that one slow dependency can stall every
+	// router behind this Traefik instance.
 	httpClient := &http.Client{
 		Transport: httpTransport,
+		Timeout:   time.Duration(cfg.Provider.OidcTimeoutSeconds) * time.Second,
 	}
 
 	logger.Log(logging.LevelInfo, "Configuration loaded successfully, starting OIDC Auth middleware...")

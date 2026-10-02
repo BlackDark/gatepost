@@ -8,6 +8,8 @@ sidebar_position: 3
 
 :::tip Config key casing
 Examples use **camelCase** keys (`secret`, `clientId`, `unauthorizedBehavior`) to match Kubernetes CRD conventions. Traefik's plugin decoder matches field names **case-insensitively**, so legacy PascalCase keys (`Secret`, `ClientId`) still work.
+
+The newer options in this reference are written in **snake_case**, matching their JSON field names exactly. `max_session_lifetime_seconds` and `maxSessionLifetimeSeconds` are the same option.
 :::
 
 :::warning Upgrading from a single `unauthorizedBehavior`
@@ -77,11 +79,140 @@ provider:
 | `errorPages` | no | [`errorPages`](#error-pages) | *none* | Allows you to customize some error pages. See *ErrorPages* block. |
 | `requestedResources` | no | `string[]`| *none* | An array of resource URIs according to [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) for which the token should be requested. | 
 | `authorizationParams` | no | `map[string]string`| *none* | Additional query parameters to send to the IDP's authorization endpoint, eg. `acr_values` to request a specific authentication context (step-up authentication) or a default `prompt`. Reserved protocol parameters (`response_type`, `client_id`, `redirect_uri`, `state`, `scope`, `resource`) cannot be overridden this way and are ignored with a warning. A `prompt` query parameter on the incoming `/login` request still takes precedence over the configured value. |
+| `authorization_params_overridable` | no | `string[]` | *none* (nothing overridable) | Which `authorizationParams` keys an incoming request may override via query parameter. **Anything not listed here is pinned to your value.** See [Overridable Authorization Params](#overridable-authorization-params). |
+| `trusted_proxies` | no | `string[]` (CIDR) | *none* (trust none) | CIDR ranges of reverse proxies in front of Traefik whose `X-Forwarded-Proto` / `X-Forwarded-Host` may be trusted. See [Trusted Proxies](#trusted-proxies). |
+| `max_session_lifetime_seconds` | no | `int` | `0` (unbounded, warns at startup) | Hard upper bound on the total lifetime of a session. See [Session Lifetime Bounds](#session-lifetime-bounds). |
+| `session_idle_timeout_seconds` | no | `int` | `0` (disabled) | Maximum gap between two accepted requests on the same session. See [Session Lifetime Bounds](#session-lifetime-bounds). |
+| `session_storage_type` | no | `string` | `""` (cookie) | Only `Cookie` is supported. Any other value is rejected at startup rather than silently ignored, so a config copied from another fork cannot give you an intermittent 401 loop across replicas. |
+
+
+### Session Lifetime Bounds {#session-lifetime-bounds}
+
+Sessions in this plugin are **stateless**. The whole session — tokens, claims, expiry — is encrypted and stored in the user's own cookie. Traefik keeps nothing server-side, which is what lets you run many replicas behind any load balancer without a shared session store, but it also means **there is no server-side record of a session to delete**.
+
+| Option | YAML key | Type | Default |
+|---|---|---|---|
+| Maximum total session lifetime | `max_session_lifetime_seconds` | `int` | `0` = unbounded (logs a warning at startup) |
+| Maximum idle time per session | `session_idle_timeout_seconds` | `int` | `0` = disabled |
+
+Because sessions are stateless and therefore **cannot be revoked** without changing the `secret`, `max_session_lifetime_seconds` is the only hard bound you have. A captured session cookie stays usable — and keeps refreshing — until the bound elapses. When it does, the next request forces the user through a fresh authentication at the IDP. Negative values are rejected at startup.
+
+```yml
+traefik-oidc-auth:
+  secret: "MLFs4TT99kOOq8h3UAVRtYoCTDYXiRcZ"
+  # highlight-start
+  max_session_lifetime_seconds: 3600   # re-authenticate at least once an hour
+  session_idle_timeout_seconds: 900    # and drop sessions idle for 15 minutes
+  # highlight-end
+```
+
+:::warning
+Leaving `max_session_lifetime_seconds` at `0` is a conscious decision to have sessions that never expire on their own. Pick a value that matches how fast you need to be able to offboard a user — see [Security Considerations](./security-considerations.md).
+:::
+
+
+### Trusted Proxies {#trusted-proxies}
+
+| Name | Required | Type | Default |
+|---|---|---|---|
+| `trusted_proxies` | no | `string[]` of CIDR ranges | *none* — **trust nothing** |
+
+The plugin builds absolute URLs — most importantly the `redirect_uri` it sends to the IDP — from the incoming request. `X-Forwarded-Proto` and `X-Forwarded-Host` are attacker-controlled headers, so they are only honoured when the request actually arrived from a proxy you declared. With an empty list they are **ignored**, which is the fail-closed default and is correct when Traefik is reachable directly.
+
+If Traefik sits behind an ingress, load balancer or CDN, you **MUST** list that hop's CIDR. Otherwise the `redirect_uri` is built from the wrong host or scheme, and the IDP rejects the callback.
+
+```yml
+traefik-oidc-auth:
+  provider:
+    url: "https://idp.example.com"
+    clientId: "<YourClientId>"
+  # highlight-start
+  trusted_proxies:
+    - "10.42.0.0/16"   # Kubernetes pod network (ingress-nginx)
+    - "172.18.0.0/16"   # Docker bridge network
+    - "192.168.1.5/32"  # a single external load balancer
+  # highlight-end
+```
+
+:::warning
+List ranges, never `0.0.0.0/0`. Anyone who can reach Traefik directly can then choose the host and scheme of the callback URL.
+:::
+
+Entries are parsed as CIDR ranges and an unparseable entry fails the whole middleware at startup. Like most string options in this plugin, each entry supports `${}` environment variables.
+
+
+### Overridable Authorization Params {#overridable-authorization-params}
+
+| Name | Required | Type | Default |
+|---|---|---|---|
+| `authorization_params_overridable` | no | `string[]` | *none* — nothing is overridable |
+
+`authorizationParams` are pinned to your configured values. Listing a key in `authorization_params_overridable` additionally lets an incoming request replace it with a query parameter of the same name.
+
+```yml
+traefik-oidc-auth:
+  # highlight-start
+  authorization_params:
+    acr_values: "aal2"
+  authorization_params_overridable: ["prompt"]
+  # highlight-end
+```
+
+Here `acr_values` stays `aal2` for everyone, while `prompt` can be set per request, e.g. `/login?prompt=login`.
+
+:::warning
+Adding `acr_values` or `prompt` to this list is a downgrade risk: `?acr_values=loa1` would weaken an authentication context you configured as `aal2`, and `?prompt=none` lets an existing IDP session satisfy a login without any user interaction. Only make a key overridable if you are willing to accept whatever the weakest client sends.
+:::
+
+
+### Per-route audience {#per-route-audience}
+
+There is **no per-route audience key**. `clientId`, `validAudience` and `validateAudience` belong to the middleware instance, not to the router.
+
+To protect one route with a different audience than the rest, declare a **second middleware** with its own client registration and attach it to that route:
+
+```yml
+http:
+  middlewares:
+    oidc-auth:
+      plugin:
+        traefik-oidc-auth:
+          provider:
+            url: "https://idp.example.com"
+            clientId: "<DefaultClientId>"
+    oidc-auth-sensitive: # highlight-start
+      plugin:
+        traefik-oidc-auth:
+          cookieNamePrefix: "TraefikOidcAuthSensitive"
+          provider:
+            url: "https://idp.example.com"
+            clientId: "<SensitiveClientId>"
+          validAudience: "<SensitiveClientId>"
+    # highlight-end
+
+  routers:
+    app:
+      rule: "Host(`app.example.com`)"
+      service: app
+      middlewares: ["oidc-auth@file"]
+    admin:
+      rule: "Host(`admin.example.com`)"
+      service: admin
+      middlewares: ["oidc-auth-sensitive@file"]
+```
+
+Give the second middleware a distinct `cookieNamePrefix` so the two session cookies do not overwrite each other when both middlewares are active on one domain.
+
+:::tip
+The same applies to any other per-middleware setting you want to vary per route — `authorization.assertClaims`, `max_session_lifetime_seconds`, `trusted_proxies` and so on. A second middleware is the only way to vary them.
+:::
 
 
 ### Redirect URI Wildcards {#redirect-uri-wildcards}
 
-OIDC/OAuth2 requires exact redirect URI matching. To opt into wildcard matching, set `TOA_ENABLE_REDIRECT_URI_WILDCARDS=true` (or `1`) on the **Traefik process**. This is an instance-wide security decision, not a middleware option. When disabled, an entry containing `*` is treated literally and logs a startup warning.
+OIDC/OAuth2 requires exact redirect URI matching. Wildcard entries are **off unless you opt in process-wide**: set the environment variable `TOA_ENABLE_REDIRECT_URI_WILDCARDS=true` (or `1`) on the **Traefik process**. This is an instance-wide security decision, not a middleware option — one Traefik instance either allows wildcard redirect URIs or it does not, and there is no per-middleware or per-route switch.
+
+**If the variable is not set, a `*` in an allowlist entry means nothing.** The entry is compared as a literal string, so `validPostLoginRedirectUris: ["https://app.example.com/*"]` only matches the exact URL `https://app.example.com/*` and rejects every real callback underneath it. Each wildcard entry in that state logs a warning at startup.
 
 With wildcards enabled:
 
@@ -108,10 +239,35 @@ With wildcards enabled:
 | `validateIssuer`* | no | `bool` | `true` | Specifies whether the `iss` claim in the JWT-token should be validated. |
 | `validIssuer`* | no | `string` | *discovery document* | The issuer which must be present in the JWT-token. By default this will be read from the OIDC discovery document. |
 | `validateAudience`* | no | `bool` | `true` | Specifies whether the `aud` claim in the JWT-token should be validated. |
-| `validAudience`* | no | `string` | *ClientId* | The audience which must be present in the JWT-token. Defaults to the configured client id. |
-| `tokenValidation`* | no | `string` | `IdToken` | Specifies which token or method should be used to validate the authentication cookie. Can be either `AccessToken`, `IdToken` or `Introspection`. `Introspection` may not work when using PKCE. |
+| `validAudience`* | no | `string` | *ClientId* | The audience which must be present in the JWT-token. Defaults to the configured client id. This is a **per-middleware** setting: there is no per-route key for it. To give one route a different audience, declare a second middleware with its own `clientId` / `validAudience` and attach that to the route. See [Per-route audience](#per-route-audience). |
+| `tokenValidation`* | no | `string` | `IdToken` | Specifies which token or method should be used to validate the authentication cookie. Can be either `AccessToken`, `IdToken` or `Introspection`. Any other value is rejected at startup rather than failing every login. `Introspection` may not work when using PKCE. |
 | `useClaimsFromUserInfo`* | no | `bool` | `false` | When enabled, an additional request to the provider's `userinfo_endpoint` is made to validate the token and to retrieve additional claims. The userinfo claims are merged directly into the token claims, with userinfo values overriding token values for non-security-critical claims. |
 | `tokenRenewalThreshold` | no | `float` | `0.75` | The percentage of the token's lifetime after which it should be renewed before expiration. The value must be between 0.5 and 1.0. |
+| `revoke_tokens_on_logout`* | no | `bool` | `true` | On user-initiated logout, POST the refresh token to the IDP's `revocation_endpoint` so neither the cookie nor the refresh token can be replayed afterwards. **Silently skipped when the IDP's discovery document advertises no `revocation_endpoint`** — check your provider before relying on it. Does not affect front-channel logout of other sessions. See [Security Considerations](./security-considerations.md). |
+| `max_auth_age_seconds` | no | `int` | `0` (disabled) | Turns `Challenge` into a real step-up authentication: sends `max_age` on the authorization request and requires the resulting ID token to carry an `auth_time` claim that recent. See [Step-Up Authentication](#step-up-authentication). |
+| `oidc_timeout_seconds` | no | `int` | `30` | Bounds **every** outbound call to the IDP — discovery, token, JWKS, introspection and userinfo. Without a client-side timeout a hung IDP pins the request goroutine indefinitely, and because discovery and JWKS loads happen under a lock one slow dependency stalls every router behind that Traefik instance. A value below `0` is reset to the default of `30`; `0` is also treated as the default. |
+
+
+### Step-Up Authentication {#step-up-authentication}
+
+Setting [`unauthorizedBehavior`](#plugin-config-block) to `Challenge` only makes the browser go back through the IDP. It does **not** by itself make the IDP ask for a password again: if the user still has a live SSO session at the IDP, the redirect returns immediately with the old authentication.
+
+`max_auth_age_seconds` fixes that. It sends `max_age` on the authorization request and requires the returned ID token's `auth_time` claim to be within that many seconds. `0` (the default) disables the check.
+
+```yml
+traefik-oidc-auth:
+  provider:
+    url: "https://idp.example.com"
+    clientId: "<YourClientId>"
+    # highlight-start
+    max_auth_age_seconds: 300
+  # highlight-end
+  unauthorizedBehavior: "Challenge"
+```
+
+:::warning
+Without `max_auth_age_seconds`, a route that advertises "re-authenticate to continue" can be satisfied by an IDP session from hours earlier. If your step-up is a real security control — a high-assurance `acr`, a sensitive action — set this value. Note that the IDP must honour `max_age`; if it ignores the parameter, the plugin cannot distinguish a fresh authentication from a cached SSO one.
+:::
 
 :::warning
 When using `useClaimsFromUserInfo`, an additional request to the provider's `userinfo_endpoint` is made to validate the token and to retrieve additional claims.
