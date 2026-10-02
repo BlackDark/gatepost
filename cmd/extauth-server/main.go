@@ -1,40 +1,21 @@
-// Command extauth-server runs the OIDC auth logic as a standalone HTTP
-// ext_authz service for reverse proxies that call an external auth backend
-// with a fixed address and describe the original request via X-Forwarded-*
-// headers (Traefik forwardAuth, Gateway API GEP-1494 HTTP mode, NGINX
-// auth_request-style setups).
-//
-// It reuses src.New(...) unchanged: forwardedRequest rewrites the inbound
-// request's Method/URL/RequestURI from X-Forwarded-Method/Proto/Host/Uri
-// before handing off to TraefikOidcAuth.ServeHTTP, so all existing session,
-// token, and redirect logic operates on the client's real request. The only
-// new piece is the "next" handler below, which stands in for "forward to
-// upstream": on allow it writes 200 and copies the headers attachHeaders()
-// already set on the request, so the gateway can inject them into the real
-// upstream call.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	src "github.com/BlackDark/test-oidc-traefik-plugin/src"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
 )
 
 func main() {
-	cfg, err := loadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "extauth-server: config error: %v\n", err)
-		os.Exit(1)
-	}
+	configPath := configFilePath()
 
 	trustedProxies, err := parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
 	if err != nil {
@@ -59,27 +40,51 @@ func main() {
 		rw.WriteHeader(http.StatusOK)
 	})
 
-	handler, err := src.New(context.Background(), allow, cfg, "extauth-server")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "extauth-server: init error: %v\n", err)
+	ctx := context.Background()
+	router := newHostRouter()
+	factory := handlerFactory(src.New)
+	var reloadMu sync.Mutex
+
+	if err := reloadFromFile(ctx, router, configPath, allow, factory); err != nil {
+		fmt.Fprintf(os.Stderr, "extauth-server: config error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Log the routing table so an operator can confirm which Host maps to which
+	// client without guessing from a 403, and so a mis-keyed config shows up in
+	// the startup log rather than only at request time. Re-logged on every hot
+	// reload by doReload.
+	if startupCfg, err := parseMultiConfigFile(configPath); err == nil {
+		for _, c := range startupCfg.Clients {
+			fmt.Printf("extauth-server: client %q serving host(s) %v\n", c.ID, c.Hosts)
+		}
+	}
+
+	reload := func() {
+		doReload(ctx, &reloadMu, router, configPath, allow, factory)
+	}
+	go watchConfig(ctx, configPath, parseSecretWatchDirs(os.Getenv("SECRET_WATCH_DIRS")), reload)
+	go watchSIGHUP(ctx, reload)
 
 	grpcAddr := os.Getenv("GRPC_LISTEN_ADDR")
 	if grpcAddr != "" {
 		go func() {
 			fmt.Printf("extauth-server (grpc) listening on %s\n", grpcAddr)
-			if err := runGRPCServer(grpcAddr, handler); err != nil {
+			if err := runGRPCServer(grpcAddr, router); err != nil {
 				fmt.Fprintf(os.Stderr, "extauth-server: grpc: %v\n", err)
 				os.Exit(1)
 			}
 		}()
 	}
 
+	// Log the routing table so an operator can confirm which Host maps to which
+	// client without guessing from a 403, and so a mis-keyed config is visible in
+	// the startup log rather than only at request time.
+	fmt.Println("extauth-server: multi-client Host routing — restrict ingress to the gateway (NetworkPolicy); set TRUSTED_PROXIES narrowly for HTTP mode")
 	fmt.Printf("extauth-server listening on %s\n", listenAddr)
 	httpServer := &http.Server{
 		Addr:              listenAddr,
-		Handler:           forwardedRequest(trustedProxies, handler),
+		Handler:           forwardedRequest(trustedProxies, router),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -230,26 +235,4 @@ func parseTrustedProxies(value string) ([]*net.IPNet, error) {
 		nets = append(nets, n)
 	}
 	return nets, nil
-}
-
-// loadConfig reads CONFIG_FILE (JSON, same shape as .traefik.yml testData /
-// Traefik dynamic config for this plugin). Values support ${VAR} and
-// ${file:/path} expansion via the existing utils helpers inside src.New.
-func loadConfig() (*config.Config, error) {
-	path := os.Getenv("CONFIG_FILE")
-	if path == "" {
-		path = "config.json"
-	}
-
-	data, err := os.ReadFile(path) //nolint:gosec // CONFIG_FILE is operator-supplied deployment config, not attacker input
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
-	}
-
-	cfg := src.CreateConfig()
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
-	}
-
-	return cfg, nil
 }

@@ -124,7 +124,7 @@ func validateSessionTicket(toa *TraefikOidcAuth, sessionTicket string) (*session
 
 	if !success || err != nil || idpTokenExpiresSoon {
 		if session.RefreshToken != "" {
-			toa.logger.Log(logging.LevelInfo, "Trying to renew tokens...")
+			toa.logger.Log(logging.LevelDebug, "renewing tokens session=%s", session.Id)
 
 			newTokens, err := toa.renewToken(session.RefreshToken)
 			if err != nil {
@@ -162,7 +162,7 @@ func validateSessionTicket(toa *TraefikOidcAuth, sessionTicket string) (*session
 			session.RefreshedAt = time.Now()
 			session.TokenExpiresIn = newTokens.ExpiresIn
 
-			toa.logger.Log(logging.LevelInfo, "Successfully renewed session")
+			toa.logger.Log(logging.LevelInfo, "session renewed id=%s expiresIn=%d", session.Id, newTokens.ExpiresIn)
 
 			return session, claims, session, err
 		}

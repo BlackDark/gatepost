@@ -112,7 +112,7 @@ func (toa *TraefikOidcAuth) EnsureOidcDiscovery() error {
 
 	jwks := &oidc.JwksHandler{}
 	toa.Jwks = jwks
-	toa.logger.Log(logging.LevelInfo, "Getting OIDC discovery document...")
+	toa.logger.Log(logging.LevelDebug, "Fetching OIDC discovery document...")
 
 	oidcDiscoveryDocument, err := GetOidcDiscovery(toa.logger, toa.httpClient, parsedURL)
 	if err != nil {
@@ -130,7 +130,8 @@ func (toa *TraefikOidcAuth) EnsureOidcDiscovery() error {
 		validAudience = toa.Config.Provider.ClientId
 	}
 
-	toa.logger.Log(logging.LevelInfo, "OIDC Discovery successful. AuthEndPoint: %s", oidcDiscoveryDocument.AuthorizationEndpoint)
+	toa.logger.Log(logging.LevelInfo, "OIDC discovery ok issuer=%s auth=%s",
+		oidcDiscoveryDocument.Issuer, oidcDiscoveryDocument.AuthorizationEndpoint)
 
 	// Everything that DiscoveryDocument consumers depend on is set before the
 	// document itself is published.
@@ -466,7 +467,8 @@ func (toa *TraefikOidcAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	toa.logger.Log(logging.LevelDebug, "No usable session for this request: %v", err)
+	// Missing/invalid session is the normal path for first visits and expired cookies.
+	toa.logger.Log(logging.LevelDebug, "session unavailable host=%s path=%s: %s", req.Host, req.URL.Path, err.Error())
 
 	// Clear the session cookie
 	_ = clearChunkedCookie(toa.Config, rw, req, getSessionCookieName(toa.Config))
@@ -896,6 +898,12 @@ func (toa *TraefikOidcAuth) handleCallback(rw http.ResponseWriter, req *http.Req
 			return
 		}
 
+		// One high-signal line per successful login: which subject authenticated on
+		// which host, and whether it satisfied the configured claim assertions.
+		sub, _ := claims["sub"].(string)
+		toa.logger.Log(logging.LevelInfo, "login ok host=%s sub=%s authorized=%t",
+			req.Host, sub, sess.IsAuthorized)
+
 		if toa.Config.Provider.UsePkceBool {
 			clearLegacyCodeVerifierCookies(toa.Config, rw, req, toa.CallbackURL)
 		}
@@ -931,7 +939,7 @@ func (toa *TraefikOidcAuth) handleCallback(rw http.ResponseWriter, req *http.Req
 		return
 	}
 
-	toa.logger.Log(logging.LevelInfo, "Redirecting to %s", redirectUrl)
+	toa.logger.Log(logging.LevelDebug, "post-login redirect host=%s to=%s", req.Host, redirectUrl)
 
 	http.Redirect(rw, req, redirectUrl, http.StatusFound)
 }
@@ -1048,7 +1056,11 @@ func (toa *TraefikOidcAuth) establishSession(rw http.ResponseWriter, token *oidc
 }
 
 func (toa *TraefikOidcAuth) handleLogout(rw http.ResponseWriter, req *http.Request, session *session.SessionState) {
-	toa.logger.Log(logging.LevelInfo, "Logging out...")
+	sessionId := ""
+	if session != nil {
+		sessionId = session.Id
+	}
+	toa.logger.Log(logging.LevelInfo, "logout host=%s session=%s", req.Host, sessionId)
 
 	// https://openid.net/specs/openid-connect-rpinitiated-1_0.html
 
@@ -1123,8 +1135,6 @@ func secureStringEqual(a, b string) bool {
 // out. Both are therefore required and compared against the session in constant
 // time; a rejected notification never clears the cookie.
 func (toa *TraefikOidcAuth) handleFrontchannelLogout(rw http.ResponseWriter, req *http.Request, sess *session.SessionState, claims map[string]interface{}) {
-	toa.logger.Log(logging.LevelInfo, "Handling frontchannel logout...")
-
 	iss := req.URL.Query().Get("iss")
 	if iss == "" {
 		toa.logger.Log(logging.LevelWarn, "Frontchannel logout rejected: iss is missing")
@@ -1181,6 +1191,8 @@ func (toa *TraefikOidcAuth) handleFrontchannelLogout(rw http.ResponseWriter, req
 		toa.logger.Log(logging.LevelWarn, "Token revocation failed, continuing with frontchannel logout: %s", err.Error())
 	}
 
+	toa.logger.Log(logging.LevelInfo, "frontchannel logout ok host=%s iss=%s sid_present=%t",
+		req.Host, iss, req.URL.Query().Get("sid") != "")
 	_ = clearChunkedCookie(toa.Config, rw, req, getSessionCookieName(toa.Config))
 	toa.writeSuccessfulLogout(rw, req)
 }
@@ -1293,7 +1305,8 @@ func (toa *TraefikOidcAuth) writeUnauthorizedError(rw http.ResponseWriter, req *
 // handleLogin starts the OIDC login flow. Non-empty redirectUrlOverride wins over request-derived targets
 // (used when re-challenging from handleCallback where req is the callback URL).
 func (toa *TraefikOidcAuth) handleLogin(rw http.ResponseWriter, req *http.Request, isChallenge bool, redirectUrlOverride string) {
-	toa.logger.Log(logging.LevelInfo, "Logging in...")
+	toa.logger.Log(logging.LevelInfo, "login start challenge=%t host=%s method=%s path=%s",
+		isChallenge, req.Host, req.Method, req.URL.Path)
 	var redirectUrl string
 
 	if redirectUrlOverride != "" {
@@ -1403,7 +1416,8 @@ func (toa *TraefikOidcAuth) applyAuthorizationParamOverrides(urlValues url.Value
 }
 
 func (toa *TraefikOidcAuth) redirectToProvider(rw http.ResponseWriter, req *http.Request, redirectUrl string, isChallenge bool) {
-	toa.logger.Log(logging.LevelInfo, "Redirecting to OIDC provider...")
+	toa.logger.Log(logging.LevelDebug, "redirect to IdP host=%s clientId=%s returnTo=%s",
+		req.Host, toa.Config.Provider.ClientId, redirectUrl)
 
 	callbackUrl := toa.GetAbsoluteCallbackURL(req).String()
 
@@ -1494,7 +1508,7 @@ func (toa *TraefikOidcAuth) redirectToProvider(rw http.ResponseWriter, req *http
 }
 
 func (toa *TraefikOidcAuth) doubleRedirectToProvider(rw http.ResponseWriter, req *http.Request, redirectUrl string, isChallenge bool) {
-	toa.logger.Log(logging.LevelInfo, "Redirecting to OIDC provider via callback URL...")
+	toa.logger.Log(logging.LevelDebug, "double-redirect to IdP via callback host=%s returnTo=%s", req.Host, redirectUrl)
 
 	callbackUrl := toa.GetAbsoluteCallbackURL(req)
 

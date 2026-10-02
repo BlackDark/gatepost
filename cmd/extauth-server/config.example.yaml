@@ -1,0 +1,24 @@
+# Example multi-client config for extauth-server.
+# Mount secrets as files; prefer ${file:...} over env for client secrets / cookie secrets.
+clients:
+  - id: grafana
+    hosts:
+      - grafana.example.com
+    secret: ${file:/secrets/grafana/cookie-secret}
+    provider:
+      url: https://idp.example.com
+      clientId: grafana
+      clientSecret: ${file:/secrets/grafana/client-secret}
+    cookieNamePrefix: grafana
+    callbackUri: /oidc/callback
+
+  - id: argo
+    hosts:
+      - argo.example.com
+    secret: ${file:/secrets/argo/cookie-secret}
+    provider:
+      url: https://idp.example.com
+      clientId: argo
+      clientSecret: ${file:/secrets/argo/client-secret}
+    cookieNamePrefix: argo
+    callbackUri: /oidc/callback

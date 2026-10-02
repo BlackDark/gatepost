@@ -135,42 +135,55 @@ jobs:
       - name: Smoke test - starts and listens
         run: |
           set -euo pipefail
-          cfg="$(mktemp)"
-          cat >"$cfg" <<'JSON'
-          {
-            "secret": "0123456789abcdef0123456789abcdef",
-            "callback_uri": "/oidc/callback",
-            "provider": {
-              "url": "http://127.0.0.1:1/default",
-              "client_id": "traefik"
-            }
-          }
-          JSON
+          cfg="$(mktemp --suffix=.yaml)"
+          # This branch switched extauth-server from a JSON CONFIG_FILE to the
+          # Host-keyed multi-client YAML surface, so the smoke config must be YAML.
+          # Note for whoever merges this: main's copy of this step still writes
+          # JSON and must be reconciled at merge time - a JSON body here is
+          # rejected by this loader and the container exits immediately.
+          cat >"$cfg" <<'YAML'
+          clients:
+            - id: smoke
+              hosts: ["smoke.example.com"]
+              secret: "0123456789abcdef0123456789abcdef"
+              callbackUri: "/oidc/callback"
+              provider:
+                url: "http://127.0.0.1:1/default"
+                clientId: traefik
+          YAML
           # The image runs as distroless "nonroot" (uid 65532). mktemp creates
           # 0600 owned by the runner user, so without this the container cannot
           # read its own config, exits immediately, and the poll below times out.
           chmod 644 "$cfg"
           container="$(docker run --rm -d \
             -e LISTEN_ADDR=:9002 \
-            -e CONFIG_FILE=/tmp/config.json \
-            -v "$cfg:/tmp/config.json:ro" \
+            -e CONFIG_FILE=/tmp/config.yaml \
+            -v "$cfg:/tmp/config.yaml:ro" \
             extauth-server:ci)"
           trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
           for _ in $(seq 1 30); do
             logs="$(docker logs "$container" 2>&1 || true)"
-            # Config keys must be the snake_case json tags, not Traefik's
-            # camelCase dynamic-config keys: loadConfig() decodes with
-            # encoding/json, so "clientId"/"callbackUri" are silently dropped
-            # and the process would start with an empty client id - a test
-            # asserting on that proves nothing about the real loader.
+            # The config must exercise the real loader. On this branch that is
+            # yaml.v3 against the yaml tags, so the keys below are the camelCase
+            # Go field names; a wrong key is silently dropped rather than
+            # rejected, so assert on the configured client id appearing in the
+            # startup log rather than only on "it started".
             if grep -qiE "config error|init error" <<<"$logs"; then
               echo "::error::extauth-server reported a config error"
               echo "$logs"
               exit 1
             fi
             if grep -q "listening on" <<<"$logs"; then
-              echo "extauth-server image booted and reported a listener"
-              exit 0
+              # Assert the configured client actually loaded. A silently
+              # mis-keyed config still starts and still listens, so "it booted"
+              # alone does not prove the loader was exercised.
+              if grep -q "smoke.example.com" <<<"$logs"; then
+                echo "extauth-server image booted, reported a listener, and loaded the configured client"
+                exit 0
+              fi
+              echo "::error::extauth-server listened but never registered the configured host"
+              echo "$logs"
+              exit 1
             fi
             # Fail fast instead of burning the full 30s when the process is
             # already gone: that is always a real startup failure. --no-trunc is

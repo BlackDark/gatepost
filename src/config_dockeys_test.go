@@ -29,12 +29,13 @@ import (
 // entirely on the Traefik path. So a plugin option documented as `max_session_lifetime_seconds`
 // decodes to the zero value and every Traefik deployment silently loses that security control.
 //
-// The json tags are NOT dead weight: cmd/extauth-server/main.go:223 loads its own CONFIG_FILE
-// with encoding/json, which DOES honour them. The two configuration surfaces therefore
-// deliberately use different spellings for the same option:
-//
-//	Traefik (mapstructure, no TagName) : maxSessionLifetimeSeconds   (Go field name)
-//	extauth-server (encoding/json)      : max_session_lifetime_seconds (json tag)
+// The `json:"..."` tags are NOT what cmd/extauth-server reads any more. That service loads a
+// YAML multi-client config with gopkg.in/yaml.v3 against the `yaml:"..."` tags; the
+// snake_case encoding/json single-client surface was removed. The `yaml:"..."` tags are
+// required to be the lowerCamel form of the Go field name, which is EXACTLY what Traefik
+// matches - see YamlTagsAreTheLowerCamelGoFieldName below - so one spelling serves both
+// surfaces and the guard's scope is Traefik only. The historical reason the two spellings
+// diverged is gone; keep an eye on that when editing.
 //
 // WHAT THIS FILE ACTUALLY GUARDS (and what it used to miss)
 //
@@ -62,7 +63,8 @@ import (
 //       snake_case json tag exactly, or matches the last segment of a dotted path.
 //   (b) Markdown table cells in website/docs/** + README.md whose whole content is a single
 //       backticked token (optionally followed by "*"), i.e. the "Name"/"Option"/"YAML key"
-//       column of an option reference table.
+//       column of an option reference table. Every column is scanned - there is no longer a
+//       second-surface column that snake_case would be legitimate in.
 //
 // Positions that are NOT scanned, and why:
 //
@@ -72,11 +74,13 @@ import (
 //     an unrelated field (`client_id` is ProviderConfig's tag, `max_age` is
 //     SessionCookieConfig's). Matching them would make this test cry wolf.
 //   - Table cells that hold prose rather than a bare key.
-//   - Columns of a table whose HEADER says it documents the other surface (it contains
-//     "CONFIG_FILE", "snake_case" or "encoding/json"). That is precisely where the snake_case
-//     spelling is CORRECT and belongs - the casing table in
-//     website/docs/getting-started/middleware-configuration.md and the sentence in the
-//     provider table that explains the `provider.revoke_tokens_on_logout_bool` divergence.
+//
+// There is deliberately NO "other surface" column exemption any more. It used to skip any
+// column whose header mentioned CONFIG_FILE / snake_case / encoding/json, which was correct
+// while extauth-server really was a snake_case JSON surface - and became exactly the hole
+// that let middleware-configuration.md keep documenting the deleted surface while CI stayed
+// green. Both surfaces are now camelCase YAML, so a snake_case key in a Traefik-facing doc is
+// ALWAYS wrong and every column is scanned.
 //
 // The repo root is located from this source file's own path (runtime.Caller), NOT from the
 // working directory, so the test behaves identically whether `go test` is invoked as ./src,
@@ -125,8 +129,9 @@ var (
 	claimType = reflect.TypeOf(config.ClaimAssertion{})
 )
 
-// configStructs is every operator-facing config struct whose json tags make up the
-// snake_case spelling that must never leak into the Traefik-facing documentation.
+// configStructs is every operator-facing config struct. The json tags make up the snake_case
+// spelling that must never leak into the Traefik-facing documentation; the yaml tags must be
+// the lowerCamel Go field name (YamlTagsAreTheLowerCamelGoFieldName).
 var configStructs = []reflect.Type{
 	cfgType, provType, cookieTyp, hdrType, cookType, authType, headType, claimType,
 }
@@ -136,10 +141,10 @@ var configStructs = []reflect.Type{
 // pins it to a real Go field name and to the docs.
 //
 // Entries with documented=false are real Traefik-acceptable Go field names that the Traefik
-// docs deliberately do NOT offer. The *_Bool shims are the clearest example: on the Traefik
+// docs deliberately do NOT offer. The *Bool shims are the clearest example: on the Traefik
 // path the string field (revokeTokensOnLogout: "true") is the documented option, while the
-// JSON boolean field exists so cmd/extauth-server's encoding/json CONFIG_FILE can carry a real
-// boolean instead of the string Traefik needs. See the casing table in
+// bool field exists so cmd/extauth-server's YAML CONFIG_FILE can carry a native boolean
+// instead of the string Traefik needs. See the casing table in
 // website/docs/getting-started/middleware-configuration.md.
 var traefikConfigKeys = []dockey{
 	// Top-level Config options.
@@ -195,10 +200,10 @@ var traefikConfigKeys = []dockey{
 	{"tokenRenewalThreshold", provType, "TokenRenewalThreshold", true},
 	{"useClaimsFromUserInfo", provType, "UseClaimsFromUserInfo", true},
 
-	// The *_Bool shims. Traefik accepts these Go field names (mapstructure matches them
+	// The *Bool shims. Traefik accepts these Go field names (mapstructure matches them
 	// case-insensitively, exactly like the string field above it), but they are NOT offered
-	// as Traefik options: they exist for cmd/extauth-server's encoding/json CONFIG_FILE, which
-	// needs a real JSON boolean rather than Traefik's string. The json tag must not be
+	// as Traefik options: they exist for cmd/extauth-server's YAML CONFIG_FILE, which can
+	// carry a native boolean rather than Traefik's string. The json tag must not be
 	// documented as a Traefik key either.
 	{"revokeTokensOnLogoutBool", provType, "RevokeTokensOnLogoutBool", false},
 	{"insecureSkipVerifyBool", provType, "InsecureSkipVerifyBool", false},
@@ -229,8 +234,8 @@ var traefikConfigKeys = []dockey{
 const configDocFail = "\nTraefik decodes this plugin's config with mapstructure and NO DecoderConfig.TagName " +
 	"(Traefik v3.5 pkg/plugins/middlewareyaegi.go:93-102), so it matches the GO FIELD NAME " +
 	"case-insensitively and IGNORES the `json:\"...\"` struct tags entirely.\n" +
-	"The snake_case spelling is only correct for cmd/extauth-server's CONFIG_FILE, which is " +
-	"loaded with encoding/json (cmd/extauth-server/main.go:223).\n" +
+	"The snake_case spelling belongs to neither surface: cmd/extauth-server's CONFIG_FILE is " +
+	"loaded with gopkg.in/yaml.v3 (cmd/extauth-server/config_multi.go).\n" +
 	"Fix the documented Traefik key to the Go field name, or rename the Go field; do not add a " +
 	"mapstructure tag and assume Traefik reads it."
 
@@ -255,6 +260,23 @@ func jsonTagName(f reflect.StructField) (string, bool) {
 		return "", false
 	}
 	return strings.Split(tag, ",")[0], true
+}
+
+func yamlTagName(f reflect.StructField) (string, bool) {
+	tag, ok := f.Tag.Lookup("yaml")
+	if !ok {
+		return "", false
+	}
+	return strings.Split(tag, ",")[0], true
+}
+
+// lowerCamel renders the lowerCamel form of a Go field name, i.e. the spelling BOTH config
+// surfaces accept.
+func lowerCamel(field string) string {
+	if field == "" {
+		return ""
+	}
+	return strings.ToLower(field[:1]) + field[1:]
 }
 
 // snakeTags maps every snake_case json tag of every operator-facing config struct to the Go
@@ -343,11 +365,11 @@ type docFile struct {
 // traefikDocs collects the Traefik-facing documentation: every *.md under website/docs plus
 // the repository README.md.
 //
-// docs/extauth-server.md is EXCLUDED, and deliberately so: it documents cmd/extauth-server's
-// CONFIG_FILE, which IS decoded with encoding/json, so snake_case json tags are the CORRECT
-// spelling there (its example config is literally `{"log_level": ...}`). It does not live under
-// website/docs, and it must never be added to this scan - "fixing" its snake_case keys to
-// camelCase would break the extauth-server config format.
+// docs/extauth-server.md is EXCLUDED from the file walk simply because it does not live under
+// website/docs: it documents cmd/extauth-server's own CONFIG_FILE rather than the Traefik
+// middleware surface. Since that CONFIG_FILE became YAML it is camelCase too, so the old reason
+// ("snake_case json tags are correct there") no longer holds - the tripwire below stays only as
+// a guard against this file being pulled into a Traefik-facing scan.
 // docsRelPrefix is the repo-relative directory holding the Traefik-facing documentation.
 const docsRelPrefix = "website/docs/"
 
@@ -405,8 +427,8 @@ func traefikDocs(t *testing.T, root string) []docFile {
 	}
 	for _, f := range files {
 		if strings.HasSuffix(f.rel, "extauth-server.md") {
-			t.Fatalf("%s must never be scanned by this guard: it documents cmd/extauth-server's "+
-				"encoding/json CONFIG_FILE, where snake_case json tags are the correct spelling", f.rel)
+			t.Fatalf("%s must never be added to the Traefik-facing scan: it documents "+
+				"cmd/extauth-server's own CONFIG_FILE, not the middleware surface", f.rel)
 		}
 	}
 	return files
@@ -440,7 +462,6 @@ func scanDocsForSnakeCaseKeys(files []docFile, tags map[string]string) []docOffe
 		// Per-column "this column documents the other surface" flags, tracked across the whole
 		// table from its HEADER row down - the header of the casing table is what marks the
 		// CONFIG_FILE column, and the offending cells sit in the data rows below it.
-		var tableSkip []bool
 		inTable := false
 		for i := 0; i < len(lines); i++ {
 			line := strings.TrimRight(lines[i], "\r")
@@ -450,7 +471,7 @@ func scanDocsForSnakeCaseKeys(files []docFile, tags map[string]string) []docOffe
 				} else {
 					fenceLang, fenceStart = "", 0
 				}
-				inTable, tableSkip = false, nil
+				inTable = false
 				continue
 			}
 			if fenceLang != "" {
@@ -473,18 +494,20 @@ func scanDocsForSnakeCaseKeys(files []docFile, tags map[string]string) []docOffe
 			}
 			cells, isRow := tableRowCells(line)
 			if !isRow {
-				inTable, tableSkip = false, nil
+				inTable = false
 				continue
 			}
 			if isSeparatorRow(cells) {
 				continue
 			}
 			if !inTable {
-				// First row of a table: treat it as the header and compute the skip mask.
-				inTable, tableSkip = true, otherSurfaceColumns(cells)
+				// First row of a table: treated as the header. Every column is scanned;
+				// there is no longer a "this column documents the other surface" exemption
+				// (see the file header for why that exemption was removed).
+				inTable = true
 				continue
 			}
-			out = append(out, scanTableCells(f.rel, i+1, line, cells, tableSkip, tags)...)
+			out = append(out, scanTableCells(f.rel, i+1, line, cells, tags)...)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -531,15 +554,13 @@ func yamlKey(line string) (string, bool) {
 	return "", false
 }
 
-// scanTableCells reports snake_case json tags used as a bare table-cell key. Cells whose
-// column header explicitly documents the other surface (CONFIG_FILE / snake_case /
-// encoding/json) are skipped: that is exactly where snake_case is correct.
-func scanTableCells(file string, lineNo int, line string, cells []string, skip []bool, tags map[string]string) []docOffense {
+// scanTableCells reports snake_case json tags used as a bare table-cell key, in ANY column.
+// An earlier version skipped columns whose header mentioned CONFIG_FILE / snake_case /
+// encoding/json; both surfaces are camelCase YAML now, so a snake_case key in a
+// Traefik-facing table is always wrong and that exemption only hid the stale documentation.
+func scanTableCells(file string, lineNo int, line string, cells []string, tags map[string]string) []docOffense {
 	var out []docOffense
-	for i, cell := range cells {
-		if i < len(skip) && skip[i] {
-			continue
-		}
+	for _, cell := range cells {
 		key, ok := bareBacktickedToken(cell)
 		if !ok {
 			continue
@@ -590,21 +611,6 @@ func splitTableRow(line string) []string {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
 	return parts
-}
-
-// otherSurfaceColumns reports, per column, whether the header cell documents the
-// cmd/extauth-server CONFIG_FILE surface rather than the Traefik one.
-func otherSurfaceColumns(cells []string) []bool {
-	skip := make([]bool, len(cells))
-	for i, cell := range cells {
-		head := strings.ToLower(strings.Trim(strings.TrimSpace(cell), "*` "))
-		if strings.Contains(head, "config_file") ||
-			strings.Contains(head, "snake_case") ||
-			strings.Contains(head, "encoding/json") {
-			skip[i] = true
-		}
-	}
-	return skip
 }
 
 // bareBacktickedToken returns the token of a table cell whose entire content is a single
@@ -709,9 +715,10 @@ func TestTraefikConfigKeys(t *testing.T) {
 	})
 
 	t.Run("JsonTagsStaySnakeCase", func(t *testing.T) {
-		// Document the deliberate divergence: the json tag is the extauth-server spelling and
-		// is NOT the Traefik spelling. If someone "cleans up" the json tag to camelCase,
-		// cmd/extauth-server's CONFIG_FILE changes shape - also a breaking change.
+		// Document the deliberate divergence: the json tag is the legacy wire spelling and is
+		// NOT the Traefik spelling, and NOT the CONFIG_FILE spelling either (CONFIG_FILE is
+		// yaml.v3 now). If someone "cleans up" the json tag to camelCase it stops being the
+		// legacy shape - keep it snake_case, and keep it out of the docs.
 		for _, k := range traefikConfigKeys {
 			f, ok := fieldByFold(k.owner, k.fieldName)
 			if !ok {
@@ -719,8 +726,8 @@ func TestTraefikConfigKeys(t *testing.T) {
 			}
 			tag, hasTag := jsonTagName(f)
 			if !hasTag {
-				t.Errorf("%s.%s has no json tag; cmd/extauth-server (cmd/extauth-server/main.go:223) "+
-					"decodes CONFIG_FILE with encoding/json and would reject that key", k.owner.Name(), f.Name)
+				t.Errorf("%s.%s has no json tag; every operator-facing config field must keep the "+
+					"legacy snake_case wire shape it has always had", k.owner.Name(), f.Name)
 				continue
 			}
 			if tag == f.Name {
@@ -735,6 +742,51 @@ func TestTraefikConfigKeys(t *testing.T) {
 		}
 	})
 
+	t.Run("YamlTagsAreTheLowerCamelGoFieldName", func(t *testing.T) {
+		// THE guard for the one-spelling-both-surfaces claim (docs/extauth-server.md).
+		//
+		// yaml.v3 matches struct fields CASE-INSENSITIVELY, so a wrong yaml tag still
+		// binds on the extauth-server path and the bug stays invisible in tests; but
+		// Traefik's mapstructure has no TagName and matches the GO FIELD NAME. A tag
+		// spelled `caBundle` therefore works under yaml.v3 and is SILENTLY DROPPED by
+		// Traefik. yaml.v3's leniency hid exactly that for CABundle/CABundleFile.
+		//
+		// Requiring every yaml tag to be the lowerCamel form of its Go field name makes
+		// the two spellings identical by construction, so the documented
+		// "one spelling serves both surfaces" is a property of the structs, not a claim.
+		checked := 0
+		for _, st := range configStructs {
+			for i := 0; i < st.NumField(); i++ {
+				f := st.Field(i)
+				if f.PkgPath != "" { // unexported
+					continue
+				}
+				tag, ok := yamlTagName(f)
+				if !ok {
+					t.Errorf("%s.%s has no yaml tag; cmd/extauth-server's CONFIG_FILE is decoded "+
+						"with gopkg.in/yaml.v3 and the key would be dropped silently", st.Name(), f.Name)
+					continue
+				}
+				if tag == "-" || tag == "" {
+					checked++
+					continue // deliberately excluded from the YAML surface
+				}
+				checked++
+				if want := lowerCamel(f.Name); tag != want {
+					t.Errorf("%s.%s has yaml tag %q, want %q (the lowerCamel form of the Go field name).\n"+
+						"yaml.v3 matches case-insensitively so %q LOOKS like it works under extauth-server, but "+
+						"Traefik's tagless mapstructure matches the Go field name (%s) and drops %q with no error. "+
+						"Fix the tag, not the docs.",
+						st.Name(), f.Name, tag, want, tag, f.Name, tag)
+				}
+			}
+		}
+		if checked < 40 {
+			t.Fatalf("yaml tag walk checked only %d fields; the reflection broke and this subtest "+
+				"would pass vacuously", checked)
+		}
+	})
+
 	t.Run("DocsDoNotUseSnakeCaseJsonTagsAsTraefikKeys", func(t *testing.T) {
 		// THE NEW GUARD. The structural checks above cannot see a documentation regression:
 		// re-typing `maxSessionLifetimeSeconds` as `max_session_lifetime_seconds` in
@@ -746,9 +798,10 @@ func TestTraefikConfigKeys(t *testing.T) {
 			t.Errorf("%s:%d: documentation uses the snake_case json tag %q as a Traefik config key:\n  %s\n"+
 				"  Traefik matches the Go field name case-insensitively and ignores the json tag, so %q "+
 				"decodes to the zero value with NO error - the option looks configured and silently does nothing.\n"+
-				"  Use the camelCase spelling %q here. The snake_case spelling %q is only valid inside "+
-				"cmd/extauth-server's CONFIG_FILE, which IS decoded with encoding/json "+
-				"(docs/extauth-server.md, cmd/extauth-server/main.go:223)%s",
+				"  Use the camelCase spelling %q here. The snake_case spelling %q is the legacy "+
+				"encoding/json wire shape and is NOT accepted by either current surface: Traefik "+
+				"matches the Go field name and cmd/extauth-server's CONFIG_FILE is decoded with "+
+				"gopkg.in/yaml.v3%s",
 				o.file, o.line, o.snake, o.context, o.snake, o.camel, o.snake, configDocFail)
 		}
 	})
@@ -789,7 +842,7 @@ func TestTraefikConfigKeys(t *testing.T) {
 				t.Errorf("documented Traefik key %q (%s.%s) does not appear anywhere under %s. "+
 					"Either document it (the docs are the surface an operator actually types) or mark it "+
 					"documented=false in traefikConfigKeys if it is deliberately not offered on the Traefik "+
-					"surface. Its json tag is %q, which is CONFIG_FILE-only.%s",
+					"surface. Its json tag is %q, which is legacy-JSON-only.%s",
 					k.documentedKey, k.owner.Name(), k.fieldName, docsRelPrefix, tag, configDocFail)
 			}
 			if !k.documented && len(files) > 0 {
@@ -830,24 +883,62 @@ func TestTraefikConfigKeys(t *testing.T) {
 		}
 	})
 
-	t.Run("DocScannerIgnoresTheConfigFileSurface", func(t *testing.T) {
-		// Counterpart of the self-check: the scanner must NOT flag the legitimate places where
-		// snake_case is correct, otherwise the guard gets switched off and stops guarding.
+	t.Run("DocScannerIgnoresNonKeyProse", func(t *testing.T) {
+		// Counterpart of the self-check: the scanner must NOT flag the legitimate places a
+		// snake_case string appears without being a config key, otherwise the guard gets
+		// switched off and stops guarding. The rules are (1) prose is never a key position,
+		// (2) a key only counts inside a config fence, (3) every table column counts.
+		//
+		// This used to be DocScannerIgnoresTheConfigFileSurface and asserted that a
+		// snake_case CONFIG_FILE column was skipped. That surface was deleted, the skip
+		// that hid it was removed, and this fixture now asserts the CURRENT behaviour.
 		legit := []docFile{{
 			rel: "fixture/legit.md",
 			data: []byte("" +
-				"| Option | Traefik YAML (camelCase) | `cmd/extauth-server` `CONFIG_FILE` (snake_case) |\n" +
-				"|---|---|---|\n" +
-				"| Log level | `logLevel` | `log_level` |\n" +
-				"| Total session lifetime bound | `maxSessionLifetimeSeconds` | `max_session_lifetime_seconds` |\n" +
-				"| Trusted proxies | `trustedProxies` | *no `CONFIG_FILE` equivalent* - `TRUSTED_PROXIES` env |\n" +
+				"| Option | Spelling |\n" +
+				"|---|---|\n" +
+				"| Log level | `logLevel` |\n" +
+				"| Total session lifetime bound | `maxSessionLifetimeSeconds` |\n" +
+				"| Trusted proxies | `trustedProxies` |\n" +
+				"\n" +
+				"The snake_case `json` tags (`log_level`, `callback_uri`, `provider.client_id`) are not " +
+				"valid keys on either surface.\n" +
+				"\n" +
+				"```sh\n" +
+				"CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 go run ./cmd/extauth-server\n" +
+				"max_session_lifetime_seconds: 3600\n" +
+				"```\n" +
 				"\n" +
 				"The reserved OAuth parameters (`client_id`, `max_age`, `acr_values`) are protocol names, " +
 				"not Traefik config keys.\n"),
 		}}
 		for _, o := range scanDocsForSnakeCaseKeys(legit, tags) {
-			t.Errorf("scanner flagged legitimate CONFIG_FILE prose at %s:%d (%q); a guard that cries wolf "+
-				"on the correct spelling gets deleted, so the heuristic must stay this narrow", o.file, o.line, o.snake)
+			t.Errorf("scanner flagged non-key prose at %s:%d (%q) in context %q; a guard that cries wolf "+
+				"on the correct spelling gets deleted, so the heuristic must stay this narrow",
+				o.file, o.line, o.snake, o.context)
+		}
+	})
+
+	t.Run("DocScannerScansEveryTableColumn", func(t *testing.T) {
+		// The regression that motivated removing the other-surface skip: a snake_case key
+		// hiding in a column headed "CONFIG_FILE" used to be skipped, which is how
+		// middleware-configuration.md kept documenting the deleted JSON surface with CI
+		// green. Plant it in an arbitrary column and prove it is now caught.
+		fixtures := []docFile{{
+			rel: "fixture/every-column.md",
+			data: []byte("| Option | Traefik YAML | `cmd/extauth-server` `CONFIG_FILE` |\n" +
+				"|---|---|---|\n" +
+				"| Total session lifetime bound | `maxSessionLifetimeSeconds` | `max_session_lifetime_seconds` |\n"),
+		}}
+		found := false
+		for _, o := range scanDocsForSnakeCaseKeys(fixtures, tags) {
+			if o.snake == "max_session_lifetime_seconds" {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("scanner skipped a snake_case key in a CONFIG_FILE-headed column; that skip is " +
+				"exactly how the deleted JSON surface stayed documented while CI stayed green")
 		}
 	})
 }

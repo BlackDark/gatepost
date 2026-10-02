@@ -7,60 +7,77 @@ Source: `cmd/extauth-server/`.
 ## Running
 
 ```sh
-CONFIG_FILE=./config.json LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/extauth-server
+CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/extauth-server
 ```
 
-- `CONFIG_FILE` — path to a JSON config file. It carries the **same fields** as `.traefik.yml`'s `testData` / Traefik's dynamic plugin config (see `src/config/config.go` for all of them), but it is **not** the same *spelling*: `CONFIG_FILE` is decoded with `encoding/json`, so it uses the **snake_case `json` tags**, while Traefik decodes the plugin config with `mapstructure` and **no `TagName`**, which means it matches the **Go field name case-insensitively and ignores the `json` tags** — Traefik YAML therefore uses **camelCase**. Copying a Traefik config into `CONFIG_FILE` as-is (`clientId`, `callbackUri`, ...) decodes to zero values **without any error**, and `clientId` is silently dropped. Values support `${VAR}` and `${file:/path}` expansion (same as Traefik).
+- `CONFIG_FILE` — path to a **YAML** multi-client config (default `config.yaml`), see [Multi-client config](#multi-client-config) below. **Breaking:** the single-client JSON config is no longer supported; the process now always serves a `clients[]` map. Each entry carries the **same fields** as `.traefik.yml`'s `testData` / Traefik's dynamic plugin config (see `src/config/config.go` for all of them) under **camelCase YAML keys** — the same spelling Traefik itself uses, because both surfaces match the **Go field name** (see the casing note below). Values support `${VAR}` and `${file:/path}` expansion (same as Traefik). The two CA-bundle keys are `provider.cABundle` and `provider.cABundleFile` (note the initialism's capitals).
 - `LISTEN_ADDR` — HTTP mode listener. Default `:9002`.
 - `GRPC_LISTEN_ADDR` — gRPC mode listener. Unset by default (gRPC server does not start unless set).
+- `SECRET_WATCH_DIRS` — optional comma-separated directories to watch (in addition to the config file's directory). Use for mounted Secret volumes so `${file:…}` rotations trigger reload.
+- `SIGHUP` — triggers the same reload path as file watch.
 
-Both modes can run simultaneously against the same config/session state — pick whichever your gateway supports; see the compatibility table below.
+Both modes can run simultaneously against the same Host→client map — pick whichever your gateway supports; see the compatibility table below.
 
-### Example `CONFIG_FILE`
+## Multi-client config
 
-`CONFIG_FILE` is JSON decoded, so the keys are the **snake_case `json` tags** from `src/config/config.go` — including `provider.client_id` / `provider.client_secret`, **not** `clientId` / `clientSecret`. A camelCase key is silently ignored, which typically shows up as an empty client id and a failing login rather than as a config error.
+One process serves many OIDC clients keyed by **Host** (exact, case-insensitive; port and one trailing FQDN dot stripped; `*.suffix` wildcards with a two-label-or-more suffix, exact wins). Unknown Host → **403**.
 
-```json
-{
-  "log_level": "INFO",
-  "secret": "0123456789abcdef0123456789abcdef",
-  "callback_uri": "/oidc/callback",
-  "session_cookie": {
-    "domain": ".example.com"
-  },
-  "max_session_lifetime_seconds": 3600,
-  "session_idle_timeout_seconds": 900,
-  "authorization_params": {
-    "acr_values": "aal2"
-  },
-  "authorization_params_overridable": [],
-  "provider": {
-    "url": "https://idp.example.com",
-    "client_id": "<YourClientId>",
-    "client_secret": "<YourClientSecret>",
-    "max_auth_age_seconds": 300,
-    "oidc_timeout_seconds": 30,
-    "revoke_tokens_on_logout_bool": true
-  }
-}
+```yaml
+clients:
+  - id: grafana
+    hosts:
+      - grafana.example.com
+    secret: ${file:/secrets/grafana/cookie-secret}   # exactly 32 chars after expand
+    provider:
+      url: https://idp.example.com
+      clientId: grafana
+      clientSecret: ${file:/secrets/grafana/client-secret}
+    cookieNamePrefix: grafana
+    callbackUri: /oidc/callback
+    # …all other fields from src/config/config.go (Traefik camelCase YAML keys)
+  - id: argo
+    hosts:
+      - argo.example.com
+    secret: ${file:/secrets/argo/cookie-secret}
+    provider:
+      url: https://idp.example.com
+      clientId: argo
+      clientSecret: ${file:/secrets/argo/client-secret}
+    cookieNamePrefix: argo
 ```
 
-:::warning Boolean provider options: use the `_bool` key in `CONFIG_FILE`
-The `bool`-typed provider options (`use_pkce`, `validate_audience`, `validate_issuer`, `validate_nonce`, `use_claims_from_user_info`, `insecure_skip_verify`, and `revoke_tokens_on_logout`) are declared in Go as a **string** field plus a separate `bool` field carrying the `_bool` json tag — see `RevokeTokensOnLogout string` / `RevokeTokensOnLogoutBool bool` in `src/config/config.go`. The **string** field exists only to serve Traefik's weakly-typed `mapstructure` decoder and `${VAR}` expansion (a YAML `true` or `"${FLAG}"` binds to a string there); the **bool** field is what the code actually reads.
+Rules:
 
-`CONFIG_FILE` is decoded with `encoding/json`, which is strictly typed. So on the **JSON** surface, the key that accepts a JSON boolean is the **`*_bool` one**; the plain name takes a **string**. Writing `"revoke_tokens_on_logout": true` is not a warning, it is a hard startup failure:
+- `clients` required, ≥1 entry
+- Unique `id`, unique normalized hosts across clients, unique `cookieNamePrefix`, unique cookie `secret` — the uniqueness checks are **unconditional**, so two clients sharing `secret: ""` or the built-in default are rejected too, not just two clients sharing a real value.
+- Hosts are normalized (lowercased, port stripped, one trailing FQDN dot stripped) and must be exact names or a whole-leftmost-label `*.suffix` wildcard whose suffix has at least two labels. A bare `*`, a `*.com`-style suffix, and a wildcard anywhere but the leftmost label are **rejected by name** at load: they match nothing (bare `*`) or silently widen to a whole public suffix (`*.com`, which this process has no public-suffix list for).
+- A sub-struct explicitly set to YAML `null` (`sessionCookie:`, `authorization:`, `errorPages:`, `errorPages.unauthenticated:`, `errorPages.unauthorized:`, `authorizationHeader:`, `authorizationCookie:`, `provider:`) is **rejected with an error naming the field**, not re-defaulted. `src.New` dereferences these unconditionally, so a `null` used to panic the process; and quietly re-defaulting would contradict what the operator wrote (e.g. `authorization: null` becoming "no claim assertions"). Omit the key to get its defaults.
+- No top-level shared provider/secret — everything per client
+- Values support `${VAR}` and `${file:/path}` expansion (same as Traefik plugin)
 
-```
-extauth-server: config error: parsing ./config.json: json: cannot unmarshal bool into Go struct field Config.provider.revoke_tokens_on_logout of type string
-```
+**Reload:** file watch (debounced) on the config directory + `SECRET_WATCH_DIRS`, and `SIGHUP`. Bad reload keeps the previous map; bad boot exits 1. "Bad" includes **panicking**: the reload body runs under a `recover()` that logs the panic with a stack trace and keeps the previous map, so a config that triggers a bug in `src.New` can never take every tenant of the process down.
 
-…and the process exits `1` before the listener starts. `"revoke_tokens_on_logout": "true"` (quoted) also loads — it is expanded into the bool field — but `"revoke_tokens_on_logout_bool": true` is the form to write.
+**K8s tip:** ConfigMap for the YAML; Secret volume for files under `/secrets/<id>/…`. Prefer `${file:…}` over env for secrets.
 
-:::note There is no `trusted_proxies` in this example on purpose
-`trusted_proxies` is a real config key, but in **HTTP mode it does nothing**: `cmd/extauth-server` gates the `X-Forwarded-*` rewrite on the **`TRUSTED_PROXIES` environment variable** (parsed in `main.go`, checked against the TCP peer address in `forwardedRequest`), not on the config key. This is a **different mechanism**, not a second spelling of one — see [`TRUSTED_PROXIES`](#trusted-proxies-http-mode-only) below. The Traefik plugin, by contrast, reads the `trustedProxies` config key.
+**Trust:** same-org clients in one process share blast radius. Split Deployments for cross-tenant / high-value isolation.
+
+### Casing: why `CONFIG_FILE` keys are camelCase
+
+`CONFIG_FILE` is decoded with `gopkg.in/yaml.v3` against the `yaml` struct tags in `src/config/config.go`, which the multi-client config sets to the **Go field name**. That is deliberately the same spelling **Traefik** uses: Traefik decodes the plugin config with `mapstructure` and **no `TagName`**, so it matches the Go field name case-insensitively and ignores the `json` tags entirely. One spelling therefore serves both surfaces — `clientId`, `callbackUri`, `maxSessionLifetimeSeconds`, `trustedProxies`, `authorizationParams`, `authorizationParamsOverridable`, `provider.maxAuthAgeSeconds`, `provider.oidcTimeoutSeconds`, `provider.cABundle`, `provider.cABundleFile`.
+
+The yaml tags are **required** to be the lowerCamel form of the Go field name, and `TestTraefikConfigKeys/YamlTagsAreTheLowerCamelGoFieldName` in `src/config_dockeys_test.go` enforces that over every field of every config struct. This matters because yaml.v3 matches struct fields case-insensitively, so a wrong tag (e.g. `caBundle` for `CABundle`) binds here and looks fine, while Traefik's tagless mapstructure drops it with no error — and the documented remedy for a CA bundle that did not load is `insecureSkipVerify`, i.e. a wrong tag silently pushes operators onto the weaker control. Note the Go field names `CABundle`/`CABundleFile` take the initialism's capitals: the camelCase key is **`cABundle`**, not `caBundle`.
+
+The snake_case `json` tags (eg. `log_level`, `callback_uri`, `provider.client_id`) are **not** valid `CONFIG_FILE` keys. They are decoded only on the historical single-client JSON path, which this release removed. See the casing note in [`website/docs/getting-started/middleware-configuration.md`](../website/docs/getting-started/middleware-configuration.md#plugin-config-block).
+
+:::note Boolean provider options work under either name in YAML
+The `bool`-typed provider options (`usePkce`, `validateAudience`, `validateIssuer`, `validateNonce`, `useClaimsFromUserInfo`, `insecureSkipVerify`, and `revokeTokensOnLogout`) are declared in Go as a **string** field plus a separate `bool` field carrying the `Bool` suffix — see `RevokeTokensOnLogout string` / `RevokeTokensOnLogoutBool bool` in `src/config/config.go`. The **string** field exists only to serve Traefik's weakly-typed `mapstructure` decoder and `${VAR}` expansion; `src.New` then expands it into the `bool` field with `ExpandEnvironmentVariableBoolean`, which accepts `true`/`false`/`1`/`0`.
+
+In YAML both spellings therefore work and mean the same thing: `revokeTokensOnLogout: true` (a native YAML boolean) is accepted by the string field, and `revokeTokensOnLogoutBool: true` sets the boolean directly. The string form additionally supports `"${FLAG}"` env expansion. (The removed single-client JSON path was strictly typed and required the `_bool` key; there is no such requirement on the YAML surface.)
 :::
 
-The equivalent keys in **Traefik's** dynamic config for the same options are `logLevel`, `secret`, `callbackUri`, `sessionCookie`, `maxSessionLifetimeSeconds`, `sessionIdleTimeoutSeconds`, `trustedProxies`, `authorizationParams`, `authorizationParamsOverridable`, `provider.clientId`, `provider.clientSecret`, `provider.maxAuthAgeSeconds`, `provider.oidcTimeoutSeconds`, `provider.revokeTokensOnLogout` (the string-typed field — Traefik decodes `true` into it fine). Note the two exceptions above: `trustedProxies` is **mechanism-different** in HTTP mode (environment variable only), and every boolean option has a distinct `*_bool` JSON key. See the casing table in [`website/docs/getting-started/middleware-configuration.md`](../website/docs/getting-started/middleware-configuration.md#plugin-config-block).
+:::note There is no `trustedProxies` in this example on purpose
+`trustedProxies` is a real config key, but in **HTTP mode it does nothing**: `cmd/extauth-server` gates the `X-Forwarded-*` rewrite on the **`TRUSTED_PROXIES` environment variable** (parsed in `main.go`, checked against the TCP peer address in `forwardedRequest`), not on the config key. This is a **different mechanism**, not a second spelling of one — see [`TRUSTED_PROXIES`](#trusted-proxies-http-mode-only) below. The Traefik plugin, by contrast, reads the `trustedProxies` config key.
+:::
 
 ## Network exposure
 
@@ -141,8 +158,9 @@ Reviewed 2026-07-31 alongside the gRPC mode addition. Findings and fixes below; 
 
 ### Reviewed and accepted as-is
 
-- **Sessions are stateless** (`src/session/cookieSessionStorage.go` — encrypted into the session cookie via `config.Secret`, no server-side store). `extauth-server` is horizontally scalable with zero shared state, as long as all replicas mount the same `secret`. This is inherited from the core plugin, not something this package adds, but it directly determines the deployment model (any number of stateless replicas behind a plain `ClusterIP` Service).
-- **JWKS/OIDC-discovery caching** (`src/oidc/jwks.go`) is shared correctly across both HTTP and gRPC listeners because `main.go` calls `src.New(...)` exactly once and passes the single resulting `handler` to both `runGRPCServer` and the HTTP `http.Server`. Neither mode re-fetches JWKS or the discovery document independently.
+- **Sessions are stateless** (`src/session/cookieSessionStorage.go` — encrypted into the session cookie via each client's `secret`, no server-side store). Horizontally scalable as long as all replicas mount the same multi-client config and secrets.
+- **Host-keyed multi-client:** Unknown Host → 403 (no default client). Tenant selection security depends on gateway-only reachability (`NetworkPolicy`) and a narrow `TRUSTED_PROXIES` for HTTP mode — Host / `X-Forwarded-Host` chooses which OIDC client config applies. Split Deployments for untrusted / cross-tenant clients.
+- **JWKS/OIDC-discovery caching** is per client handler (`src.New` once per client). HTTP and gRPC share the same Host→handler map, so a given client uses one discovery/JWKS cache.
 - **`httptest.NewRecorder()` per gRPC request** — in-memory buffer, no I/O, negligible overhead; this is the standard way to capture an `http.ResponseWriter`'s output without a real network hop, and is the correct choice here since `TraefikOidcAuth.ServeHTTP` writes directly to a `ResponseWriter` and cannot be restructured to return a response value without touching the core `src` package (out of scope, and would diverge Traefik-mode behavior from ext_authz-mode behavior).
 - **Cookie header reconstruction in gRPC mode** (`buildHTTPRequest`, splitting merged header values on `,`) — correct for the common case. Envoy's `AttributeContext.HttpRequest.headers` map merges same-key headers with a comma per the HTTP spec; cookie-pairs cannot legally contain a literal comma (RFC 6265 `cookie-octet` grammar excludes it), so splitting a merged `Cookie` value back apart on `,` cannot corrupt a well-formed single `Cookie:` header (the overwhelmingly common case: one `Cookie` header, `;`-separated pairs, no comma splitting applied since there's nothing to split). Only a theoretical concern for non-conformant clients that send multiple raw `Cookie:` lines, which is a client bug, not a gap in this code.
 - **gRPC message size limits** — not set explicitly; grpc-go's default max receive size (4 MiB) already bounds request size at the transport layer before it reaches `buildHTTPRequest`.

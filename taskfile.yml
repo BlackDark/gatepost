@@ -41,7 +41,7 @@ tasks:
     cmds:
       - go build -o ../../bin/extauth-server .
   run:extauth:
-    desc: 'Run the standalone ext-authz server (needs CONFIG_FILE, default ./config.json)'
+    desc: 'Run the standalone ext-authz server (needs CONFIG_FILE, default ./config.yaml)'
     dir: 'cmd/extauth-server'
     cmds:
       - go run .

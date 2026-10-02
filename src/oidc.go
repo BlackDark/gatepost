@@ -301,7 +301,7 @@ func (toa *TraefikOidcAuth) parseJwtWithJwksRetry(ctx context.Context, tokenStri
 
 	// If the token is expired, reloading JWKS won't help — skip the retry.
 	if isTokenExpiredError(err) {
-		toa.logger.Log(logging.LevelInfo, "The token is expired.")
+		toa.logger.Log(logging.LevelDebug, "token expired")
 		return nil, err
 	}
 
@@ -313,7 +313,7 @@ func (toa *TraefikOidcAuth) parseJwtWithJwksRetry(ctx context.Context, tokenStri
 
 	if _, err := parser.ParseWithClaims(tokenString, claims, toa.Jwks.Keyfunc); err != nil {
 		if isTokenExpiredError(err) {
-			toa.logger.Log(logging.LevelInfo, "The token is expired.")
+			toa.logger.Log(logging.LevelDebug, "token expired")
 		} else {
 			toa.logger.Log(logging.LevelError, "Failed to parse %s token: %v", operation, err)
 		}

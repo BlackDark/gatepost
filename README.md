@@ -131,7 +131,7 @@ Changes will be reloaded automatically and you should see some debug output in t
 ### Standalone ext_authz service
 
 ```sh
-CONFIG_FILE=./config.json LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/extauth-server
+CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/extauth-server
 ```
 
 See [`docs/extauth-server.md`](docs/extauth-server.md) for config format, `TRUSTED_PROXIES`, and gateway-specific wiring examples (Traefik `forwardAuth`, Envoy Gateway `SecurityPolicy`).

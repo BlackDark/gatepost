@@ -1,54 +1,46 @@
 package main
 
 import (
-	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
-
-	src "github.com/BlackDark/test-oidc-traefik-plugin/src"
 )
 
-func TestLoadConfig_ReadsFileAndDefaults(t *testing.T) {
-	cfg := src.CreateConfig()
-	cfg.Provider.Url = "https://idp.example.com"
-	cfg.Provider.ClientId = "client"
-	cfg.Secret = "0123456789abcdef0123456789abcdef"
-
-	data, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+func TestLoadConfig_ReadsMultiClientYAML(t *testing.T) {
+	yaml := `
+clients:
+  - id: app
+    hosts: [app.example.com]
+    secret: "0123456789abcdef0123456789abcdef"
+    provider:
+      url: https://idp.example.com
+      clientId: client
+    cookieNamePrefix: app
+`
+	path := writeYAML(t, yaml)
 	t.Setenv("CONFIG_FILE", path)
 
-	loaded, err := loadConfig()
+	cfg, err := parseMultiConfigFile(configFilePath())
 	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
+		t.Fatalf("parse: %v", err)
 	}
-	if loaded.Provider.Url != "https://idp.example.com" {
-		t.Fatalf("Provider.Url=%q", loaded.Provider.Url)
+	if len(cfg.Clients) != 1 {
+		t.Fatalf("clients=%d", len(cfg.Clients))
 	}
-	if loaded.Provider.ClientId != "client" {
-		t.Fatalf("Provider.ClientId=%q", loaded.Provider.ClientId)
+	if cfg.Clients[0].Config.Provider.Url != "https://idp.example.com" {
+		t.Fatalf("Provider.Url=%q", cfg.Clients[0].Config.Provider.Url)
 	}
-	// Defaults from CreateConfig should survive since they're not overwritten by the file.
-	if !loaded.Provider.UsePkceBool {
+	if !cfg.Clients[0].Config.Provider.UsePkceBool {
 		t.Fatal("UsePkceBool should default true")
 	}
 }
 
 func TestLoadConfig_MissingFile(t *testing.T) {
-	t.Setenv("CONFIG_FILE", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("CONFIG_FILE", filepath.Join(t.TempDir(), "missing.yaml"))
 
-	if _, err := loadConfig(); err == nil {
+	if _, err := parseMultiConfigFile(configFilePath()); err == nil {
 		t.Fatal("expected error for missing config file")
 	}
 }
