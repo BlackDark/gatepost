@@ -12,6 +12,16 @@ updates:
     cooldown:
       default-days: 7
 
+  # cmd/extauth-server is a separate Go module (own go.mod/go.sum), so the "/"
+  # entry above never sees its dependencies - without this, envoyproxy/go-control-plane,
+  # grpc and friends were never updated.
+  - package-ecosystem: gomod
+    directory: "/cmd/extauth-server"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+
   - package-ecosystem: bun
     directory: "/website"
     schedule:
@@ -23,3 +33,16 @@ updates:
         patterns: ["*"]
     allow:
       - dependency-name: "@docusaurus/*"
+
+  # The e2e suite is its own bun workspace with a separate lockfile; the
+  # /website entry above does not cover it, so Playwright and Biome were
+  # never updated. Grouped to keep one PR per week.
+  - package-ecosystem: bun
+    directory: "/e2e"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      e2e: # Just a name
+        patterns: ["*"]

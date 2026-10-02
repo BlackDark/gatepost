@@ -61,8 +61,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Pinned to a released version on purpose: @latest means the scan tool
+      # (and therefore the findings) can change without a commit.
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./src/...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./src/...
 
   govulncheck-extauth:
     name: Go extauth-server (govulncheck)
@@ -83,7 +85,7 @@ jobs:
 
       - name: govulncheck
         working-directory: ./cmd/extauth-server
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   website:
     name: Website (Biome)
@@ -102,7 +104,10 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          # Pinned: `latest` silently moves under us, and a bun minor bump can
+          # change lint output and Playwright behaviour between two runs of the
+          # same commit. 1.4.2 is the bun release this repo is developed against.
+          bun-version: 1.4.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -127,10 +132,47 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          # Pinned: `latest` silently moves under us, and a bun minor bump can
+          # change lint output and Playwright behaviour between two runs of the
+          # same commit. 1.4.2 is the bun release this repo is developed against.
+          bun-version: 1.4.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
       - name: Lint
         run: bun run lint
+
+  workflows:
+    name: GitHub Actions (actionlint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      # Installed from a pinned module version rather than a floating action
+      # reference: actionlint has no first-party action, and a moving tag would
+      # make lint findings depend on when the job ran.
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      # actionlint shells out to shellcheck and pyflakes when they are on PATH;
+      # GitHub runners have neither, so without this the run: blocks are only
+      # syntax-checked and the shellcheck/pyflakes passes are silently skipped.
+      - name: Install shellcheck and pyflakes
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y shellcheck
+          pipx install pyflakes || pip install --user pyflakes
+
+      - name: actionlint
+        run: actionlint -color

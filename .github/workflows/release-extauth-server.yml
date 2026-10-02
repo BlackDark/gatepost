@@ -22,6 +22,9 @@ jobs:
   build-and-push:
     name: Build and push image
     runs-on: ubuntu-latest
+    # Publishing an auth component needs a deliberate, auditable gate: the
+    # environment can hold required reviewers and deployment branch rules.
+    environment: release
     permissions:
       contents: read
       packages: write # push image to GHCR
@@ -49,11 +52,47 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      # Every publish path (release event, tag push, manual dispatch) converges
+      # on one tag, and the image below carries this fork's auth code. A tag that
+      # is not a plain semver release - or a manual run pointed at a branch -
+      # must fail closed here, before anything is built or pushed.
+      - name: Validate release tag
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release tag '$TAG' is not a plain semver release tag (expected ^v[0-9]+\.[0-9]+\.[0-9]+$, e.g. v0.22.0). Prerelease tags like v1.2.3-rc1 and branch refs such as main are refused: they would publish unreviewed code to :latest."
+            exit 1
+          fi
+          echo "release tag $TAG accepted"
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ steps.resolve.outputs.tag }}
+          # Full history so the tag itself is present locally and can be checked
+          # against HEAD; the shallow default would not create the tag ref.
+          fetch-depth: 0
           persist-credentials: false
+
+      # A branch can be named "v1.2.3" and a tag can be moved after approval,
+      # so the semver shape alone is not enough: refuse to publish unless the
+      # commit we just checked out is exactly the release tag.
+      - name: Verify checkout is the release tag
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          if ! git tag --points-at HEAD | grep -qxF "$TAG"; then
+            echo "::error::checked out ref is not tagged $TAG - refusing to publish"
+            exit 1
+          fi
+
+      # The checkout ref is resolved from the tag, so github.sha is only the
+      # workflow-triggering commit and can differ (tag push vs. workflow_dispatch
+      # on another ref). Label the image with the commit actually built.
+      - name: Resolve built revision
+        id: rev
+        run: echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -86,5 +125,5 @@ jobs:
             ${{ steps.meta.outputs.image }}:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}

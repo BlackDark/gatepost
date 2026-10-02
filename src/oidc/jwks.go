@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -19,6 +20,11 @@ import (
 	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
 )
 
+// reloadFailureBackoff is how long we wait before retrying a failed reload
+// when we still have usable cached keys. Without it, a failing IdP would be
+// re-contacted on every single request (a hot retry storm).
+const reloadFailureBackoff = time.Minute
+
 type JwksHandler struct {
 	Url       string
 	RsaKeys   []*RsaKey
@@ -26,6 +32,12 @@ type JwksHandler struct {
 	CacheDate time.Time
 
 	Lock sync.RWMutex
+
+	// reloadLock serializes reloads (check-then-reload-then-recheck) without
+	// holding Lock across the network call, so that concurrent misses cannot
+	// stampede the IdP while readers keep being served from the cache.
+	reloadLock      sync.Mutex
+	lastReloadError time.Time
 }
 
 type JwksKey struct {
@@ -54,14 +66,69 @@ type EcdsaKey struct {
 }
 
 func (h *JwksHandler) EnsureLoaded(logger *logging.Logger, httpClient *http.Client, forceReload bool) error {
-	h.Lock.Lock()
-	defer h.Lock.Unlock()
+	return h.EnsureLoadedContext(context.Background(), logger, httpClient, forceReload)
+}
 
-	now := time.Now()
+func (h *JwksHandler) EnsureLoadedContext(ctx context.Context, logger *logging.Logger, httpClient *http.Client, forceReload bool) error {
+	if logger == nil {
+		logger = logging.CreateLogger(logging.LevelInfo)
+	}
+
+	// Fast path: nothing to do, under the read lock only.
+	h.Lock.RLock()
+	needed := h.needsReload(time.Now(), forceReload)
+	h.Lock.RUnlock()
+
+	if !needed {
+		return nil
+	}
+
+	// Serialize the actual reload so concurrent cache misses trigger a single
+	// request to the IdP instead of one per in-flight request.
+	h.reloadLock.Lock()
+	defer h.reloadLock.Unlock()
+
+	// Recheck: another goroutine may have reloaded while we waited.
+	h.Lock.RLock()
+	needed = h.needsReload(time.Now(), forceReload)
+	hasKeys := h.hasKeys()
+	h.Lock.RUnlock()
+
+	if !needed {
+		return nil
+	}
+
+	logger.Log(logging.LevelInfo, "Reloading JWKS...")
+
+	err := h.loadKeysContext(ctx, httpClient)
+	if err != nil {
+		if hasKeys {
+			// Fail open on the cache, not on the request: a slow or broken IdP
+			// must not wedge authentication for keys we already have.
+			logger.Log(logging.LevelWarn, "Error reloading JWKS, keeping cached keys: %v", err)
+
+			h.Lock.Lock()
+			h.lastReloadError = time.Now()
+			h.Lock.Unlock()
+
+			return nil
+		}
+
+		logger.Log(logging.LevelError, "Error loading JWKS: %v", err)
+		return err
+	}
+
+	logger.Log(logging.LevelInfo, "...JWKS reloaded :)")
+
+	return nil
+}
+
+// needsReload must be called while holding Lock (read or write).
+func (h *JwksHandler) needsReload(now time.Time, forceReload bool) bool {
 	maxCacheTimeout := now.Add(-6 * time.Hour)
 	minCacheTimeout := now.Add(-5 * time.Minute)
 
-	reload := h.RsaKeys == nil && h.EcdsaKeys == nil
+	reload := !h.hasKeys()
 
 	if h.CacheDate.Compare(maxCacheTimeout) == -1 {
 		reload = true
@@ -71,24 +138,29 @@ func (h *JwksHandler) EnsureLoaded(logger *logging.Logger, httpClient *http.Clie
 		reload = true
 	}
 
-	if reload {
-		logger.Log(logging.LevelInfo, "Reloading JWKS...")
-
-		err := h.loadKeys(httpClient)
-		if err != nil {
-			logger.Log(logging.LevelError, "Error loading JWKS: %v", err)
-		} else {
-			logger.Log(logging.LevelInfo, "...JWKS reloaded :)")
-		}
-
-		return err
+	// Back off after a failed reload instead of hammering a broken IdP.
+	if reload && !h.lastReloadError.IsZero() && now.Sub(h.lastReloadError) < reloadFailureBackoff && h.hasKeys() {
+		return false
 	}
 
-	return nil
+	return reload
+}
+
+// hasKeys must be called while holding Lock (read or write).
+func (h *JwksHandler) hasKeys() bool {
+	return len(h.RsaKeys) > 0 || len(h.EcdsaKeys) > 0
 }
 
 func (h *JwksHandler) loadKeys(httpClient *http.Client) error {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, h.Url, nil)
+	return h.loadKeysContext(context.Background(), httpClient)
+}
+
+func (h *JwksHandler) loadKeysContext(ctx context.Context, httpClient *http.Client) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.Url, nil)
 	if err != nil {
 		return err
 	}
@@ -100,9 +172,21 @@ func (h *JwksHandler) loadKeys(httpClient *http.Client) error {
 
 	defer resp.Body.Close()
 
-	loaded := JwksKeys{}
-	err = json.NewDecoder(resp.Body).Decode(&loaded)
+	// Bound the body we are willing to read: the JWKS endpoint is not a
+	// trusted-size resource and we only need a small excerpt for error output.
+	limited := io.LimitReader(resp.Body, maxJwksBodySize+1)
+
+	body, err := io.ReadAll(limited)
 	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("JWKS request to %s returned status %d: %s", h.Url, resp.StatusCode, excerptForError(body))
+	}
+
+	loaded := JwksKeys{}
+	if err := json.Unmarshal(body, &loaded); err != nil {
 		return err
 	}
 
@@ -111,15 +195,61 @@ func (h *JwksHandler) loadKeys(httpClient *http.Client) error {
 		return err
 	}
 
+	h.Lock.Lock()
 	h.RsaKeys = rsaKeys
 	h.EcdsaKeys = ecdsaKeys
 	h.CacheDate = time.Now()
+	h.lastReloadError = time.Time{}
+	h.Lock.Unlock()
 
 	return nil
 }
 
+const maxJwksBodySize = 4 << 20
+
+// maxErrorExcerpt bounds how much of a non-200 body we echo back in errors, so
+// a hostile or misconfigured endpoint cannot flood the logs.
+const maxErrorExcerpt = 512
+
+func excerptForError(body []byte) string {
+	if len(body) > maxErrorExcerpt {
+		return string(body[:maxErrorExcerpt]) + "...(truncated)"
+	}
+
+	return string(body)
+}
+
+// allowedAlgorithms is an explicit allowlist used as defence-in-depth: without
+// it any future/unknown method name that happens to match a prefix would be
+// accepted, including "none".
+//
+// Note: the previous prefix based matching (HasPrefix "RS"/"EC"/"ES") silently
+// rejected PS256/PS384/PS512, which broke RSA-PSS based IdPs. The allowlist
+// fixes that as a side effect.
+var allowedAlgorithms = map[string]struct{}{
+	"RS256": {}, "RS384": {}, "RS512": {},
+	"PS256": {}, "PS384": {}, "PS512": {},
+	"ES256": {}, "ES384": {}, "ES512": {},
+}
+
+func isAlgorithmAllowed(alg string) bool {
+	_, ok := allowedAlgorithms[strings.ToUpper(alg)]
+	return ok
+}
+
 func (h *JwksHandler) Keyfunc(token *jwt.Token) (any, error) {
-	if strings.HasPrefix(token.Method.Alg(), "RS") {
+	if token == nil || token.Method == nil {
+		return nil, errors.New("token has no signing method")
+	}
+
+	if !isAlgorithmAllowed(token.Method.Alg()) {
+		return nil, fmt.Errorf("unsupported algorithm %s", token.Method.Alg())
+	}
+
+	alg := strings.ToUpper(token.Method.Alg())
+
+	if alg == "RS256" || alg == "RS384" || alg == "RS512" ||
+		alg == "PS256" || alg == "PS384" || alg == "PS512" {
 		kid, ok := token.Header["kid"].(string)
 		if !ok || kid == "" {
 			return nil, errors.New("missing or invalid kid in token header")
@@ -133,8 +263,7 @@ func (h *JwksHandler) Keyfunc(token *jwt.Token) (any, error) {
 		return k, nil
 	}
 
-	if strings.HasPrefix(token.Method.Alg(), "EC") ||
-		strings.HasPrefix(token.Method.Alg(), "ES") {
+	if alg == "ES256" || alg == "ES384" || alg == "ES512" {
 		kid, ok := token.Header["kid"].(string)
 		if !ok || kid == "" {
 			return nil, errors.New("missing or invalid kid in token header")
@@ -152,43 +281,34 @@ func (h *JwksHandler) Keyfunc(token *jwt.Token) (any, error) {
 }
 
 func (h *JwksHandler) getRsaKey(kid string) (*rsa.PublicKey, error) {
-	k := h.findRsaKey(kid)
+	// Snapshot under the read lock: a concurrent reload replaces the slices,
+	// and iterating them without the lock would race and could observe a torn
+	// slice.
+	h.Lock.RLock()
+	keys := h.RsaKeys
+	h.Lock.RUnlock()
 
-	if k != nil {
-		return k.key, nil
+	for i := 0; i < len(keys); i++ {
+		if keys[i] != nil && kid == keys[i].kid {
+			return keys[i].key, nil
+		}
 	}
 
 	return nil, errors.New("unknown kid " + kid)
 }
 
 func (h *JwksHandler) getEcdsaKey(kid string) (*ecdsa.PublicKey, error) {
-	k := h.findEcdsaKey(kid)
+	h.Lock.RLock()
+	keys := h.EcdsaKeys
+	h.Lock.RUnlock()
 
-	if k != nil {
-		return k.key, nil
+	for i := 0; i < len(keys); i++ {
+		if keys[i] != nil && kid == keys[i].kid {
+			return keys[i].key, nil
+		}
 	}
 
 	return nil, errors.New("unknown kid " + kid)
-}
-
-func (h *JwksHandler) findRsaKey(kid string) *RsaKey {
-	for i := 0; i < len(h.RsaKeys); i++ {
-		if kid == h.RsaKeys[i].kid {
-			return h.RsaKeys[i]
-		}
-	}
-
-	return nil
-}
-
-func (h *JwksHandler) findEcdsaKey(kid string) *EcdsaKey {
-	for i := 0; i < len(h.EcdsaKeys); i++ {
-		if kid == h.EcdsaKeys[i].kid {
-			return h.EcdsaKeys[i]
-		}
-	}
-
-	return nil
 }
 
 func extractKeys(keys *JwksKeys) ([]*RsaKey, []*EcdsaKey, error) {
@@ -254,10 +374,17 @@ func extractEcdsaKey(key *JwksKey) (*EcdsaKey, error) {
 		return nil, err
 	}
 
+	curve := getEllipticCurve(key.Crv)
+	// crypto/ecdsa panics on a nil Curve during verification, so an
+	// unsupported/missing crv must never make it into the cache.
+	if curve == nil {
+		return nil, fmt.Errorf("unsupported or empty elliptic curve %q for key %q", key.Crv, key.Kid)
+	}
+
 	return &EcdsaKey{
 		kid: key.Kid,
 		key: &ecdsa.PublicKey{
-			Curve: getEllipticCurve(key.Crv),
+			Curve: curve,
 			X:     decodedX,
 			Y:     decodedY,
 		},

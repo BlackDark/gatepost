@@ -3,9 +3,9 @@
     "repoName": "traefik-oidc-auth",
 
     "targetBranchChoices": [
-        "production"
+        "main"
     ],
-    
+
     "branchLabelMapping": {
         "^backport/(.+)$": "$1"
     }
