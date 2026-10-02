@@ -82,17 +82,19 @@ jobs:
       # The Dockerfile hand-rolls cross-compilation (TARGETARCH path mapping),
       # so a plain `go build` in the Go job cannot tell us that the image still
       # builds for both published platforms. Build both here, without pushing.
+      # `type=cacheonly` is required: the default output for a multi-platform
+      # build is the docker exporter, which cannot write a manifest list and
+      # fails the step. We want the build verified and nothing exported.
       - name: Build image for all published platforms
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: cmd/extauth-server/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: false
+          outputs: type=cacheonly
 
-      # The multi-platform build above cannot be loaded into the local docker
-      # image store (the docker exporter rejects manifest lists), so build amd64
-      # again with load: true to get a runnable image for the smoke tests.
+      # A single-platform build can be loaded into the local docker image store,
+      # which gives us a runnable image for the smoke tests below.
       - name: Build amd64 image for smoke test
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:

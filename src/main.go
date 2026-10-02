@@ -475,7 +475,9 @@ func (toa *TraefikOidcAuth) hasSessionMaterial(req *http.Request) bool {
 // forwardToUpstream strips the internal cookies and every client-supplied
 // identity header, then re-applies the configured headers, so a configured
 // header is Set from the session instead of being inherited from the caller.
-func (toa *TraefikOidcAuth) forwardToUpstream(rw http.ResponseWriter, req *http.Request, sess *session.SessionState, claims map[string]interface{}, isPublicRoute bool, isAuthorized bool) {
+// claims is accepted for symmetry with the authenticated path; the forward paths
+// this is called from have no claims, so pass nil.
+func (toa *TraefikOidcAuth) forwardToUpstream(rw http.ResponseWriter, req *http.Request, sess *session.SessionState, claims map[string]interface{}, isPublicRoute bool, isAuthorized bool) { //nolint:unparam // claims is nil on every forward path
 	toa.sanitizeForUpstream(req)
 
 	if sess == nil {
@@ -796,7 +798,7 @@ func (toa *TraefikOidcAuth) handleCallback(rw http.ResponseWriter, req *http.Req
 			return
 		}
 
-		claims, err := toa.validateCallbackToken(rw, req, token, state)
+		claims, err := toa.validateCallbackToken(rw, token, state)
 		if err != nil {
 			// validateCallbackToken has already answered the request.
 			return
@@ -859,7 +861,7 @@ func (toa *TraefikOidcAuth) handleCallback(rw http.ResponseWriter, req *http.Req
 // It writes the error response itself and returns a non-nil error in that case;
 // a nil error means claims are usable. The bool returned by introspectToken is
 // honoured here: a revoked or expired token must not produce a session.
-func (toa *TraefikOidcAuth) validateCallbackToken(rw http.ResponseWriter, req *http.Request, token *oidc.OidcTokenResponse, state *oidc.OidcState) (map[string]interface{}, error) {
+func (toa *TraefikOidcAuth) validateCallbackToken(rw http.ResponseWriter, token *oidc.OidcTokenResponse, state *oidc.OidcState) (map[string]interface{}, error) {
 	tokenValidation := toa.Config.Provider.TokenValidation
 
 	var usedToken string

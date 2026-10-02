@@ -1,6 +1,7 @@
 package predicate
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -89,7 +90,7 @@ func testDef() Def {
 			case "claim.profile.name":
 				return "Jane", nil
 			case "explode":
-				return nil, errExplode{}
+				return nil, explodeError{}
 			}
 			return nil, fmt.Errorf("unknown identifier %q", strings.Join(selector, "."))
 		},
@@ -122,14 +123,14 @@ func testGetProperty(mapVal, keyVal interface{}) (interface{}, error) {
 	return GetStringMapValue(mapVal, keyVal)
 }
 
-type errExplode struct{}
+type explodeError struct{}
 
 // nilLiteral is a host identifier that resolves to an untyped nil, used to
 // reach the "host function returned a nil value" branch of callFunction without
 // relying on the Go `nil` keyword, which the evaluator treats as an identifier.
 var nilLiteral = []string(nil)
 
-func (errExplode) Error() string { return "identifier resolution failed" }
+func (explodeError) Error() string { return "identifier resolution failed" }
 
 func toFloat(v interface{}) float64 {
 	switch n := v.(type) {
@@ -179,8 +180,8 @@ func TestNewParser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewParser returned an error: %v", err)
 	}
-	if _, ok := p.(Parser); !ok {
-		t.Fatalf("NewParser returned %T, which does not implement Parser", p)
+	if p == nil {
+		t.Fatal("NewParser returned a nil Parser")
 	}
 }
 
@@ -1479,7 +1480,7 @@ func TestCallFunctionNilAndNonFunc(t *testing.T) {
 	})
 
 	t.Run("two returns with error", func(t *testing.T) {
-		_, err := callFunction(func() (int, error) { return 0, fmt.Errorf("boom") }, nil)
+		_, err := callFunction(func() (int, error) { return 0, errors.New("boom") }, nil)
 		if err == nil || err.Error() != "boom" {
 			t.Errorf("callFunction error = %v, want boom", err)
 		}

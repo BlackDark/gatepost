@@ -193,8 +193,8 @@ func checkSessionBounds(toa *TraefikOidcAuth, state *session.SessionState) error
 		return nil
 	}
 
-	if max := toa.Config.MaxSessionLifetimeSeconds; max > 0 && !state.CreatedAt.IsZero() {
-		if time.Since(state.CreatedAt) > time.Duration(max)*time.Second {
+	if maxLifetime := toa.Config.MaxSessionLifetimeSeconds; maxLifetime > 0 && !state.CreatedAt.IsZero() {
+		if time.Since(state.CreatedAt) > time.Duration(maxLifetime)*time.Second {
 			// No identifiers in this log: session ids and cookies must not reach the log.
 			toa.logger.Log(logging.LevelInfo, "Session exceeded the configured max lifetime, rejecting it")
 			return errSessionExpired

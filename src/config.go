@@ -271,7 +271,7 @@ func New(uctx context.Context, next http.Handler, cfg *config.Config, name strin
 	// makes two middlewares on one domain overwrite each other's session cookie.
 	if cfg.CookieNamePrefix == "" {
 		sum := sha256.Sum256([]byte(cfg.Provider.ClientId))
-		cfg.CookieNamePrefix = fmt.Sprintf("TraefikOidcAuth.%s", hex.EncodeToString(sum[:4]))
+		cfg.CookieNamePrefix = "TraefikOidcAuth." + hex.EncodeToString(sum[:4])
 		logger.Log(logging.LevelInfo, "cookieNamePrefix is empty, derived %q from the clientId so this instance gets its own session cookie.", cfg.CookieNamePrefix)
 	}
 

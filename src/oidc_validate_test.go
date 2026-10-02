@@ -106,11 +106,11 @@ func newValidateFixture(t *testing.T, providerFn func(*config.ProviderConfig)) *
 
 func (f *validateFixture) jwks() *oidc.JwksKeys {
 	rsaPub := &f.rsaKey.PublicKey
-	// elliptic.Marshal returns the uncompressed point: 0x04 || X || Y, so the
-	// two coordinates are the trailing halves.
-	point := elliptic.Marshal(f.ecKey.Curve, f.ecKey.X, f.ecKey.Y)
+	// JWK wants the two coordinates as fixed-width big-endian byte strings, which
+	// is exactly what ecdsa encodes at the curve's field size.
 	byteLen := (f.ecKey.Curve.Params().BitSize + 7) / 8
-	ecX, ecY := point[1:1+byteLen], point[1+byteLen:]
+	ecX := f.ecKey.X.FillBytes(make([]byte, byteLen))
+	ecY := f.ecKey.Y.FillBytes(make([]byte, byteLen))
 
 	return &oidc.JwksKeys{
 		Keys: []oidc.JwksKey{
@@ -879,10 +879,10 @@ func TestValidateTokenLocally_Concurrent(t *testing.T) {
 			defer wg.Done()
 
 			if valid, _, err := f.toa.validateTokenLocally(validToken, "expected-nonce"); err != nil || !valid {
-				errs <- fmt.Errorf("valid token rejected: valid=%v err=%v", valid, err)
+				errs <- fmt.Errorf("valid token rejected: valid=%v err=%w", valid, err)
 			}
 			if valid, _, err := f.toa.validateTokenLocally(unknownKidToken, ""); err == nil || valid {
-				errs <- fmt.Errorf("unknown kid token accepted: valid=%v err=%v", valid, err)
+				errs <- fmt.Errorf("unknown kid token accepted: valid=%v err=%w", valid, err)
 			}
 		}()
 	}

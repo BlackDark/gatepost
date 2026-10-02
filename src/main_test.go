@@ -1213,11 +1213,9 @@ func TestHandleLogout_RevokesRefreshTokenAndSurvivesFailure(t *testing.T) {
 				if !strings.Contains(rw.Header().Get("Location"), "idp.example.com/logout") {
 					t.Fatalf("unexpected Location %q", rw.Header().Get("Location"))
 				}
-			} else {
+			} else if !strings.Contains(rw.Header().Get("Location"), "idp.example.com/logout") {
 				// The revocation failed, but the logout must still have happened.
-				if !strings.Contains(rw.Header().Get("Location"), "idp.example.com/logout") {
-					t.Fatalf("a failed revocation must not block logout, Location=%q", rw.Header().Get("Location"))
-				}
+				t.Fatalf("a failed revocation must not block logout, Location=%q", rw.Header().Get("Location"))
 			}
 		})
 	}

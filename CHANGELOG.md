@@ -14,6 +14,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Fixed:** the multi-arch image check in CI failed on every run because the
+  multi-platform build used the default docker exporter, which cannot write a
+  manifest list. It now uses `type=cacheonly`, so the cross-compile is still
+  verified for both published platforms without exporting anything.
+
+### Security
+
+- Updated the Go toolchain floor to 1.26.8 in both modules. Go 1.26.5 carried
+  five published standard library vulnerabilities (including `encoding/asn1`
+  recursion depth and `net/http` Punycode label handling) reachable from this
+  code; `govulncheck` was failing on `main` before this branch.
+- Updated `google.golang.org/grpc` to v1.83.2 in `cmd/extauth-server`, fixing a
+  server panic on requests with a missing authority/Host header
+  (GO-2026-6443) and heap exhaustion via HTTP/2 DATA frame fragmentation
+  (GO-2026-6348). Both were reachable from the gRPC ext_authz listener.
+
 ### Security
 
 - Introspection responses now honour the `active` flag; an inactive token no
