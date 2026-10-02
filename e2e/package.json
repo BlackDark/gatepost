@@ -19,7 +19,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",
     "@playwright/test": "^1.61.1",
-    "@types/node": "^22.20.1",
+    "@types/node": "^26.6.2",
     "docker-compose": "^1.4.2"
   }
 }
