@@ -4,6 +4,10 @@ import * as path from 'node:path';
 const ROUTERS_API = 'http://localhost:8080/api/http/routers';
 const MIDDLEWARES_API = 'http://localhost:8080/api/http/middlewares';
 
+// Bounded wait for Traefik to apply a rewritten file-provider config. Overridable so a
+// debugging run can extend it without editing the file.
+const CONFIG_WAIT_TIMEOUT_MS = Number(process.env.E2E_CONFIG_WAIT_MS ?? 90_000);
+
 type TraefikRouter = { name?: string; provider?: string };
 type TraefikMiddleware = {
   name?: string;
@@ -59,7 +63,11 @@ export async function configureTraefik(yaml: string) {
     return;
   }
 
-  const deadline = Date.now() + 20_000;
+  // Traefik picks up a rewritten file provider config on its own schedule, and on a
+  // loaded CI runner that can take a while - especially when the plugin under test has to
+  // re-run OIDC discovery. 20s was short enough to flake on a busy runner. The wait is
+  // bounded so a genuine failure still surfaces instead of hanging.
+  const deadline = Date.now() + CONFIG_WAIT_TIMEOUT_MS;
   let last = '';
   while (Date.now() < deadline) {
     const routers = ((await fileRouterNames()) ?? []).sort();
