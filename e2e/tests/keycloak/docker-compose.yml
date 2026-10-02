@@ -18,11 +18,55 @@ services:
       KC_HTTP_MANAGEMENT_PORT: 9000
       KC_HEALTH_ENABLED: true
       KC_METRICS_ENABLED: true
+    healthcheck:
+      # quay.io/keycloak/keycloak is UBI-micro based: it ships bash (so bash's
+      # /dev/tcp redirection works) but no curl and no wget, so the usual
+      # `curl -f ...` / `wget --spider ...` one-liners do not exist in this
+      # image. The probe below therefore opens a raw TCP connection to the
+      # management port and reads the HTTP reply using nothing but bash
+      # builtins (exec / printf / read / case), so no external binary - and no
+      # PATH lookup that could fail - is involved.
+      #
+      # It asserts both "HTTP 200" and "status UP" rather than merely "is the
+      # port open": the management port is bound before the realm import
+      # finishes, so a plain port probe would call the container healthy while
+      # `start-dev --import-realm` is still migrating the DB and /realms/master
+      # still 404s - which is exactly the race this healthcheck exists to kill.
+      #
+      # Note the `|| [ -n "$line" ]`: the Quarkus health body is JSON with no
+      # trailing newline, so a bare `while read` loop silently discards the one
+      # line we care about and the probe would never succeed.
+      test:
+        - CMD
+        - /bin/bash
+        - -c
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/9000 || exit 1
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          IFS= read -r status <&3 || exit 1
+          case "$status" in
+            'HTTP/1.'*' 200'*) ;;
+            *) exit 1 ;;
+          esac
+          while IFS= read -r line <&3 || [ -n "$line" ]; do
+            case "$line" in
+              *'"status": "UP"'*|*'"status":"UP"'*) exit 0 ;;
+            esac
+          done
+          exit 1
+      interval: 5s
+      timeout: 10s
+      # start_period 90s + 36 * interval 5s = up to ~4.5 min before the
+      # container is declared unhealthy, which covers a cold `start-dev` doing
+      # an augmented build, the DB migration and the master-realm import.
+      start_period: 90s
+      retries: 36
     volumes:
       - "./master-realm.json:/opt/keycloak/data/import/master-realm.json:rw"
       - "./certificates:/certificates:ro"
     depends_on:
-      - keycloak_postgres
+      keycloak_postgres:
+        condition: service_healthy
     command: ['start-dev', '--import-realm']
 
   keycloak_postgres:
@@ -33,6 +77,15 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_PORT: 5432
+    healthcheck:
+      # Without this, keycloak and postgres start in parallel and keycloak can
+      # lose the race and die on a refused DB connection (Quarkus does not
+      # retry at startup). pg_isready ships in the postgres image.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d keycloak"]
+      interval: 3s
+      timeout: 5s
+      start_period: 5s
+      retries: 20
 
   traefik:
     image: "traefik:v3.5.0"
@@ -55,6 +108,12 @@ services:
       PROVIDER_URL_HTTPS: https://localhost:8001/realms/master
       CLIENT_ID: traefik
       CLIENT_SECRET: LQslcjK8ZeRrrhW7jKaFUUous9W5QvCr
+    # Mirrors tests/mock-oidc: traefik must not exist until the IdP is genuinely
+    # serving, otherwise the first request through the plugin races the OIDC
+    # discovery call against a keycloak that is still starting.
+    depends_on:
+      keycloak:
+        condition: service_healthy
 
   whoami:
     # Pinned like its siblings: whoami has no v3.x line to match traefik:v3.5.0,

@@ -73,7 +73,11 @@ jobs:
 
   test-keycloak:
     name: E2E tests (keycloak)
-    timeout-minutes: 60
+    # A cold `keycloak start-dev --import-realm` gets a 420s compose wait plus a
+    # 180s readiness wait, and Playwright retries the whole file once in CI -
+    # which re-runs beforeAll, so the worst case is two full fixture startups.
+    # 60min was too tight for that; 75 is generous but still bounded.
+    timeout-minutes: 75
     runs-on: ubuntu-latest
     # The keycloak project is the only coverage of the provider cABundle /
     # cABundleFile custom-CA path, so it must not stay unrun. It needs a
@@ -113,9 +117,27 @@ jobs:
         run: bunx playwright install --with-deps chromium
 
       - name: Run Playwright tests
+        id: playwright
         run: bunx playwright test --project=keycloak
         env:
           CI: true
+
+      # The spec's afterEach dumps traefik + keycloak logs, but afterEach does
+      # NOT run when beforeAll itself fails (compose never came up, or the
+      # readiness wait timed out) - which is exactly the failure this job is
+      # most likely to hit. This step covers that gap so a future red run is
+      # diagnosable from the log alone, without admin access to job logs.
+      - name: Dump compose state on failure
+        if: ${{ failure() && steps.playwright.outcome == 'failure' }}
+        run: |
+          echo "===== docker compose ps -a ====="
+          docker compose -f tests/keycloak/docker-compose.yml ps -a || true
+          echo "===== keycloak logs (tail 200) ====="
+          docker compose -f tests/keycloak/docker-compose.yml logs --no-color --tail 200 keycloak || true
+          echo "===== keycloak_postgres logs (tail 100) ====="
+          docker compose -f tests/keycloak/docker-compose.yml logs --no-color --tail 100 keycloak_postgres || true
+          echo "===== traefik logs (tail 200) ====="
+          docker compose -f tests/keycloak/docker-compose.yml logs --no-color --tail 200 traefik || true
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
