@@ -4,7 +4,7 @@ go 1.26.8
 
 require (
 	github.com/BlackDark/test-oidc-traefik-plugin v0.21.1
-	github.com/envoyproxy/go-control-plane/envoy v1.37.0
+	github.com/envoyproxy/go-control-plane/envoy v1.39.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260729162451-8efbd57d26e0
 	google.golang.org/grpc v1.83.2
 )
