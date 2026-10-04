@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
 const testSecret = "0123456789abcdef0123456789abcdef"

@@ -19,9 +19,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/oidc"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/oidc"
 )
 
 const (
@@ -31,11 +31,11 @@ const (
 	validateTestEcKid    = "test-ec-kid"
 )
 
-// validateFixture serves a JWKS over httptest and wires a TraefikOidcAuth whose
+// validateFixture serves a JWKS over httptest and wires a Gatepost whose
 // Jwks handler points at it, so validateTokenLocally exercises the real key
 // fetch, cache and reload path without any network access.
 type validateFixture struct {
-	toa    *TraefikOidcAuth
+	toa    *Gatepost
 	rsaKey *rsa.PrivateKey
 	ecKey  *ecdsa.PrivateKey
 
@@ -90,7 +90,7 @@ func newValidateFixture(t *testing.T, providerFn func(*config.ProviderConfig)) *
 		providerFn(provider)
 	}
 
-	toa := &TraefikOidcAuth{
+	toa := &Gatepost{
 		logger:     logging.CreateLogger(logging.LevelDebug),
 		Config:     &config.Config{Provider: provider, Scopes: []string{"openid"}},
 		httpClient: f.server.Client(),

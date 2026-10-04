@@ -8,7 +8,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           logLevel: DEBUG
           secret: "0123456789abcdef0123456789abcdef" # Please change this secret for your setup
           provider:

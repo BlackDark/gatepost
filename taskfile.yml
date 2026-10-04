@@ -35,14 +35,14 @@ tasks:
     cmds:
       - npm start
 
-  build:extauth:
+  build:extauthz:
     desc: 'Build the standalone ext-authz server binary'
-    dir: 'cmd/extauth-server'
+    dir: 'cmd/gatepost-extauthz'
     cmds:
-      - go build -o ../../bin/extauth-server .
-  run:extauth:
+      - go build -o ../../bin/gatepost-extauthz .
+  run:extauthz:
     desc: 'Run the standalone ext-authz server (needs CONFIG_FILE, default ./config.yaml)'
-    dir: 'cmd/extauth-server'
+    dir: 'cmd/gatepost-extauthz'
     cmds:
       - go run .
 
@@ -50,7 +50,7 @@ tasks:
     desc: 'Run all unit and end to end tests'
     deps:
       - test:unit
-      - test:extauth
+      - test:extauthz
       - test:e2e
   test:unit:
     desc: 'Run all go unit tests'
@@ -60,9 +60,9 @@ tasks:
       # middleware shares discovery/JWKS state behind locks; -count=1 because a
       # cached pass is not evidence the tests still pass.
       - go test -count=1 -race ./...
-  test:extauth:
+  test:extauthz:
     desc: 'Run unit tests for the standalone ext-authz server'
-    dir: 'cmd/extauth-server'
+    dir: 'cmd/gatepost-extauthz'
     cmds:
       - go test -count=1 -race ./...
   test:e2e:
@@ -82,10 +82,10 @@ tasks:
     desc: 'Lint and check Go formatting'
     cmds:
       - golangci-lint run ./src/...
-      - task: lint:go:extauth
-  lint:go:extauth:
+      - task: lint:go:extauthz
+  lint:go:extauthz:
     desc: 'Lint the standalone ext-authz server (separate Go module)'
-    dir: 'cmd/extauth-server'
+    dir: 'cmd/gatepost-extauthz'
     cmds:
       - golangci-lint run ./...
   lint:sec:
@@ -94,10 +94,10 @@ tasks:
       # Pinned to a released version: @latest makes the findings depend on when
       # the command ran rather than on the commit.
       - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./src/...
-      - task: lint:sec:extauth
-  lint:sec:extauth:
+      - task: lint:sec:extauthz
+  lint:sec:extauthz:
     desc: 'Go vulnerability check for the standalone ext-authz server (separate Go module)'
-    dir: 'cmd/extauth-server'
+    dir: 'cmd/gatepost-extauthz'
     cmds:
       - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
   lint:website:
@@ -121,10 +121,10 @@ tasks:
     desc: 'Format Go code'
     cmds:
       - golangci-lint run --fix ./src/...
-      - task: fmt:go:extauth
-  fmt:go:extauth:
+      - task: fmt:go:extauthz
+  fmt:go:extauthz:
     desc: 'Format the standalone ext-authz server (separate Go module)'
-    dir: 'cmd/extauth-server'
+    dir: 'cmd/gatepost-extauthz'
     cmds:
       - golangci-lint run --fix ./...
   fmt:website:

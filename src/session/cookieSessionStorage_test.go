@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/utils"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
 )
 
 const storageTestSecret = "0123456789abcdef0123456789abcdef"

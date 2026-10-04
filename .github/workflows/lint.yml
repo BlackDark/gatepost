@@ -40,11 +40,11 @@ jobs:
           working-directory: .
           args: ./src/...
 
-      - name: golangci-lint (extauth-server)
+      - name: golangci-lint (gatepost-extauthz)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.12.2
-          working-directory: ./cmd/extauth-server
+          working-directory: ./cmd/gatepost-extauthz
           args: ./...
 
   govulncheck:
@@ -69,8 +69,8 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./src/...
 
-  govulncheck-extauth:
-    name: Go extauth-server (govulncheck)
+  govulncheck-extauthz:
+    name: Go gatepost-extauthz (govulncheck)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,11 +83,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version-file: cmd/extauth-server/go.mod
+          go-version-file: cmd/gatepost-extauthz/go.mod
           cache: true
 
       - name: govulncheck
-        working-directory: ./cmd/extauth-server
+        working-directory: ./cmd/gatepost-extauthz
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   website:

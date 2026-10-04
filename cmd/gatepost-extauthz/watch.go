@@ -23,7 +23,7 @@ const reloadDebounce = 300 * time.Millisecond
 func watchConfig(ctx context.Context, configPath string, secretDirs []string, reload func()) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("extauth-server: file watch disabled: %v", err)
+		log.Printf("gatepost-extauthz: file watch disabled: %v", err)
 		return
 	}
 	defer watcher.Close()
@@ -33,7 +33,7 @@ func watchConfig(ctx context.Context, configPath string, secretDirs []string, re
 			return
 		}
 		if err := watcher.Add(path); err != nil {
-			log.Printf("extauth-server: watch %s: %v", path, err)
+			log.Printf("gatepost-extauthz: watch %s: %v", path, err)
 		}
 	}
 
@@ -84,7 +84,7 @@ func watchConfig(ctx context.Context, configPath string, secretDirs []string, re
 			if !ok {
 				return
 			}
-			log.Printf("extauth-server: watch error: %v", err)
+			log.Printf("gatepost-extauthz: watch error: %v", err)
 		}
 	}
 }
@@ -155,13 +155,13 @@ func doReload(ctx context.Context, mu *sync.Mutex, r *hostRouter, path string, n
 	// successful buildHostMap.
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("extauth-server: reload panicked (keeping previous config): %v\n%s", rec, debug.Stack())
+			log.Printf("gatepost-extauthz: reload panicked (keeping previous config): %v\n%s", rec, debug.Stack())
 		}
 	}()
 
 	if err := reloadFromFile(ctx, r, path, next, factory); err != nil {
-		log.Printf("extauth-server: reload failed (keeping previous config): %v", err)
+		log.Printf("gatepost-extauthz: reload failed (keeping previous config): %v", err)
 		return
 	}
-	log.Printf("extauth-server: reloaded config from %s", path)
+	log.Printf("gatepost-extauthz: reloaded config from %s", path)
 }

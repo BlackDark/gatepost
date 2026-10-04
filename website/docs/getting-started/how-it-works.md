@@ -26,7 +26,7 @@ The plugin simplifies secure access to protected services, eliminating the need 
 ```mermaid
 sequenceDiagram
     participant User as User
-    participant Traefik as Traefik (with traefik-oidc-auth Plugin)
+    participant Traefik as Traefik (with gatepost Plugin)
     participant OAuth as OAuth Provider
     participant Service as Upstream Service
 
@@ -75,7 +75,7 @@ This will then trigger the logout flow which is as follows:
 ```mermaid
 sequenceDiagram
     participant User as User
-    participant Traefik as Traefik (with traefik-oidc-auth Plugin)
+    participant Traefik as Traefik (with gatepost Plugin)
     participant OAuth as OAuth Provider
 
     User->>Traefik: Navigate to /logout

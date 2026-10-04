@@ -69,7 +69,7 @@ services:
     volumes:
       - "../configs/traefik-config.yml:/etc/traefik/traefik.yml:ro"
       - "../configs/http.yml:/etc/traefik/configs/http.yml:ro"
-      - "../..:/plugins-local/src/github.com/BlackDark/test-oidc-traefik-plugin:ro"
+      - "../..:/plugins-local/src/github.com/BlackDark/gatepost:ro"
       - "/var/run/docker.sock:/var/run/docker.sock"
     env_file:
       - ./.env

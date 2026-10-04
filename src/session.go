@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/session"
 )
 
-func (toa *TraefikOidcAuth) getSessionForRequest(req *http.Request) (*session.SessionState, bool, map[string]interface{}, error) {
+func (toa *Gatepost) getSessionForRequest(req *http.Request) (*session.SessionState, bool, map[string]interface{}, error) {
 	// Use AuthorizationHeader, if present
 	if toa.Config.AuthorizationHeader != nil && toa.Config.AuthorizationHeader.Name != "" {
 		authHeader := req.Header.Get(toa.Config.AuthorizationHeader.Name)
@@ -97,7 +97,7 @@ func (toa *TraefikOidcAuth) getSessionForRequest(req *http.Request) (*session.Se
 	return session, updatedSession != nil, claims, nil
 }
 
-func validateSessionTicket(toa *TraefikOidcAuth, sessionTicket string) (*session.SessionState, map[string]interface{}, *session.SessionState, error) {
+func validateSessionTicket(toa *Gatepost, sessionTicket string) (*session.SessionState, map[string]interface{}, *session.SessionState, error) {
 	session, err := toa.SessionStorage.TryGetSession(toa.logger, toa.Config, sessionTicket)
 	if err != nil {
 		toa.logger.Log(logging.LevelError, "Reading session failed: %v", err.Error())
@@ -188,7 +188,7 @@ var errSessionExpired = errors.New("session expired")
 // session: logout only clears the browser copy and a captured cookie otherwise renews for
 // as long as the IDP honours the refresh token.
 // A 0 bound disables the check, matching src.New's config validation.
-func checkSessionBounds(toa *TraefikOidcAuth, state *session.SessionState) error {
+func checkSessionBounds(toa *Gatepost, state *session.SessionState) error {
 	if toa.Config == nil {
 		return nil
 	}
@@ -211,7 +211,7 @@ func checkSessionBounds(toa *TraefikOidcAuth, state *session.SessionState) error
 	return nil
 }
 
-func checkIdpTokenExpiresSoon(toa *TraefikOidcAuth, session *session.SessionState) bool {
+func checkIdpTokenExpiresSoon(toa *Gatepost, session *session.SessionState) bool {
 	if session.TokenExpiresIn > 0 {
 		pastDuration := time.Since(session.RefreshedAt)
 
@@ -226,7 +226,7 @@ func checkIdpTokenExpiresSoon(toa *TraefikOidcAuth, session *session.SessionStat
 	return false
 }
 
-func (toa *TraefikOidcAuth) validateToken(session *session.SessionState) (bool, map[string]interface{}, error) {
+func (toa *Gatepost) validateToken(session *session.SessionState) (bool, map[string]interface{}, error) {
 	var token string
 
 	// Little bit hacky. In case the request contains a custom AuthorizationHeader or Cookie, only AccessToken is used.
@@ -278,7 +278,7 @@ func (toa *TraefikOidcAuth) validateToken(session *session.SessionState) (bool, 
 // must not forward the request upstream or redirect: a superseded WriteHeader is
 // silently dropped, the body would be spliced onto the error, and the backend would
 // serve a request whose session this middleware just declared unpersistable.
-func (toa *TraefikOidcAuth) storeSessionAndAttachCookie(session *session.SessionState, rw http.ResponseWriter) error {
+func (toa *Gatepost) storeSessionAndAttachCookie(session *session.SessionState, rw http.ResponseWriter) error {
 	sessionTicket, err := toa.SessionStorage.StoreSession(toa.logger, toa.Config, session.Id, session)
 	if err != nil {
 		toa.logger.Log(logging.LevelError, "Failed to store session: %s", err.Error())

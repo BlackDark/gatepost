@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/oidc"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/oidc"
 )
 
-func newErrorBodyTestAuth(t *testing.T) *TraefikOidcAuth {
+func newErrorBodyTestAuth(t *testing.T) *Gatepost {
 	t.Helper()
 
-	return &TraefikOidcAuth{
+	return &Gatepost{
 		logger: logging.CreateLogger(logging.LevelDebug),
 		Config: &config.Config{
 			Secret: "0123456789abcdef0123456789abcdef",

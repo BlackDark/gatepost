@@ -6,24 +6,24 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/errorPages"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/oidc"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/errorPages"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/oidc"
+	"github.com/BlackDark/gatepost/src/session"
 )
 
-func newAuthBehaviorTestAuth(t *testing.T) *TraefikOidcAuth {
+func newAuthBehaviorTestAuth(t *testing.T) *Gatepost {
 	t.Helper()
 	callback, err := url.Parse("https://app.example.com/oidc/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &TraefikOidcAuth{
+	return &Gatepost{
 		logger: logging.CreateLogger(logging.LevelError),
 		Config: &config.Config{
 			Secret:                  "0123456789abcdef0123456789abcdef",
-			CookieNamePrefix:        "TraefikOidcAuth",
+			CookieNamePrefix:        "Gatepost",
 			FrontChannelLogoutUri:   "/frontchannel-logout",
 			UnauthorizedBehavior:    "Challenge",
 			UnauthenticatedBehavior: "Auto",
@@ -170,7 +170,7 @@ func TestServeHTTP_FrontchannelNoSessionReturns200(t *testing.T) {
 }
 
 // TestAttachHeaders_SetsRequestHeadersForNext verifies the header-templating
-// behavior that cmd/extauth-server's "allow" handler relies on: attachHeaders
+// behavior that cmd/gatepost-extauthz's "allow" handler relies on: attachHeaders
 // writes rendered header values onto req.Header before next is invoked, so
 // copying req.Header in the ext_authz allow response is sufficient.
 func TestAttachHeaders_SetsRequestHeadersForNext(t *testing.T) {

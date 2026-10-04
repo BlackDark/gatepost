@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	"github.com/BlackDark/gatepost/src/config"
 )
 
 // WHY THIS FILE EXISTS
@@ -29,7 +29,7 @@ import (
 // entirely on the Traefik path. So a plugin option documented as `max_session_lifetime_seconds`
 // decodes to the zero value and every Traefik deployment silently loses that security control.
 //
-// The `json:"..."` tags are NOT what cmd/extauth-server reads any more. That service loads a
+// The `json:"..."` tags are NOT what cmd/gatepost-extauthz reads any more. That service loads a
 // YAML multi-client config with gopkg.in/yaml.v3 against the `yaml:"..."` tags; the
 // snake_case encoding/json single-client surface was removed. The `yaml:"..."` tags are
 // required to be the lowerCamel form of the Go field name, which is EXACTLY what Traefik
@@ -77,7 +77,7 @@ import (
 //
 // There is deliberately NO "other surface" column exemption any more. It used to skip any
 // column whose header mentioned CONFIG_FILE / snake_case / encoding/json, which was correct
-// while extauth-server really was a snake_case JSON surface - and became exactly the hole
+// while gatepost-extauthz really was a snake_case JSON surface - and became exactly the hole
 // that let middleware-configuration.md keep documenting the deleted surface while CI stayed
 // green. Both surfaces are now camelCase YAML, so a snake_case key in a Traefik-facing doc is
 // ALWAYS wrong and every column is scanned.
@@ -143,7 +143,7 @@ var configStructs = []reflect.Type{
 // Entries with documented=false are real Traefik-acceptable Go field names that the Traefik
 // docs deliberately do NOT offer. The *Bool shims are the clearest example: on the Traefik
 // path the string field (revokeTokensOnLogout: "true") is the documented option, while the
-// bool field exists so cmd/extauth-server's YAML CONFIG_FILE can carry a native boolean
+// bool field exists so cmd/gatepost-extauthz's YAML CONFIG_FILE can carry a native boolean
 // instead of the string Traefik needs. See the casing table in
 // website/docs/getting-started/middleware-configuration.md.
 var traefikConfigKeys = []dockey{
@@ -202,7 +202,7 @@ var traefikConfigKeys = []dockey{
 
 	// The *Bool shims. Traefik accepts these Go field names (mapstructure matches them
 	// case-insensitively, exactly like the string field above it), but they are NOT offered
-	// as Traefik options: they exist for cmd/extauth-server's YAML CONFIG_FILE, which can
+	// as Traefik options: they exist for cmd/gatepost-extauthz's YAML CONFIG_FILE, which can
 	// carry a native boolean rather than Traefik's string. The json tag must not be
 	// documented as a Traefik key either.
 	{"revokeTokensOnLogoutBool", provType, "RevokeTokensOnLogoutBool", false},
@@ -234,8 +234,8 @@ var traefikConfigKeys = []dockey{
 const configDocFail = "\nTraefik decodes this plugin's config with mapstructure and NO DecoderConfig.TagName " +
 	"(Traefik v3.5 pkg/plugins/middlewareyaegi.go:93-102), so it matches the GO FIELD NAME " +
 	"case-insensitively and IGNORES the `json:\"...\"` struct tags entirely.\n" +
-	"The snake_case spelling belongs to neither surface: cmd/extauth-server's CONFIG_FILE is " +
-	"loaded with gopkg.in/yaml.v3 (cmd/extauth-server/config_multi.go).\n" +
+	"The snake_case spelling belongs to neither surface: cmd/gatepost-extauthz's CONFIG_FILE is " +
+	"loaded with gopkg.in/yaml.v3 (cmd/gatepost-extauthz/config_multi.go).\n" +
 	"Fix the documented Traefik key to the Go field name, or rename the Go field; do not add a " +
 	"mapstructure tag and assume Traefik reads it."
 
@@ -365,8 +365,8 @@ type docFile struct {
 // traefikDocs collects the Traefik-facing documentation: every *.md under website/docs plus
 // the repository README.md.
 //
-// docs/extauth-server.md is EXCLUDED from the file walk simply because it does not live under
-// website/docs: it documents cmd/extauth-server's own CONFIG_FILE rather than the Traefik
+// docs/gatepost-extauthz.md is EXCLUDED from the file walk simply because it does not live under
+// website/docs: it documents cmd/gatepost-extauthz's own CONFIG_FILE rather than the Traefik
 // middleware surface. Since that CONFIG_FILE became YAML it is camelCase too, so the old reason
 // ("snake_case json tags are correct there") no longer holds - the tripwire below stays only as
 // a guard against this file being pulled into a Traefik-facing scan.
@@ -426,9 +426,9 @@ func traefikDocs(t *testing.T, root string) []docFile {
 		t.Fatalf("only %d documentation files found under %s; expected the whole website/docs tree plus README.md", len(files), abs)
 	}
 	for _, f := range files {
-		if strings.HasSuffix(f.rel, "extauth-server.md") {
+		if strings.HasSuffix(f.rel, "gatepost-extauthz.md") {
 			t.Fatalf("%s must never be added to the Traefik-facing scan: it documents "+
-				"cmd/extauth-server's own CONFIG_FILE, not the middleware surface", f.rel)
+				"cmd/gatepost-extauthz's own CONFIG_FILE, not the middleware surface", f.rel)
 		}
 	}
 	return files
@@ -732,21 +732,21 @@ func TestTraefikConfigKeys(t *testing.T) {
 			}
 			if tag == f.Name {
 				t.Errorf("%s.%s json tag %q equals the Go field name; the two config surfaces are "+
-					"meant to be spelled differently, and the tag must stay the extauth-server "+
+					"meant to be spelled differently, and the tag must stay the gatepost-extauthz "+
 					"snake_case spelling, not the Traefik one", k.owner.Name(), f.Name, tag)
 			}
 			if hasSnakeTag(f) && strings.ToLower(tag) != tag {
-				t.Errorf("%s.%s json tag %q is not lower snake_case; expected the extauth-server "+
+				t.Errorf("%s.%s json tag %q is not lower snake_case; expected the gatepost-extauthz "+
 					"CONFIG_FILE spelling, not the Traefik Go field name", k.owner.Name(), f.Name, tag)
 			}
 		}
 	})
 
 	t.Run("YamlTagsAreTheLowerCamelGoFieldName", func(t *testing.T) {
-		// THE guard for the one-spelling-both-surfaces claim (docs/extauth-server.md).
+		// THE guard for the one-spelling-both-surfaces claim (docs/gatepost-extauthz.md).
 		//
 		// yaml.v3 matches struct fields CASE-INSENSITIVELY, so a wrong yaml tag still
-		// binds on the extauth-server path and the bug stays invisible in tests; but
+		// binds on the gatepost-extauthz path and the bug stays invisible in tests; but
 		// Traefik's mapstructure has no TagName and matches the GO FIELD NAME. A tag
 		// spelled `caBundle` therefore works under yaml.v3 and is SILENTLY DROPPED by
 		// Traefik. yaml.v3's leniency hid exactly that for CABundle/CABundleFile.
@@ -763,7 +763,7 @@ func TestTraefikConfigKeys(t *testing.T) {
 				}
 				tag, ok := yamlTagName(f)
 				if !ok {
-					t.Errorf("%s.%s has no yaml tag; cmd/extauth-server's CONFIG_FILE is decoded "+
+					t.Errorf("%s.%s has no yaml tag; cmd/gatepost-extauthz's CONFIG_FILE is decoded "+
 						"with gopkg.in/yaml.v3 and the key would be dropped silently", st.Name(), f.Name)
 					continue
 				}
@@ -774,7 +774,7 @@ func TestTraefikConfigKeys(t *testing.T) {
 				checked++
 				if want := lowerCamel(f.Name); tag != want {
 					t.Errorf("%s.%s has yaml tag %q, want %q (the lowerCamel form of the Go field name).\n"+
-						"yaml.v3 matches case-insensitively so %q LOOKS like it works under extauth-server, but "+
+						"yaml.v3 matches case-insensitively so %q LOOKS like it works under gatepost-extauthz, but "+
 						"Traefik's tagless mapstructure matches the Go field name (%s) and drops %q with no error. "+
 						"Fix the tag, not the docs.",
 						st.Name(), f.Name, tag, want, tag, f.Name, tag)
@@ -800,7 +800,7 @@ func TestTraefikConfigKeys(t *testing.T) {
 				"decodes to the zero value with NO error - the option looks configured and silently does nothing.\n"+
 				"  Use the camelCase spelling %q here. The snake_case spelling %q is the legacy "+
 				"encoding/json wire shape and is NOT accepted by either current surface: Traefik "+
-				"matches the Go field name and cmd/extauth-server's CONFIG_FILE is decoded with "+
+				"matches the Go field name and cmd/gatepost-extauthz's CONFIG_FILE is decoded with "+
 				"gopkg.in/yaml.v3%s",
 				o.file, o.line, o.snake, o.context, o.snake, o.camel, o.snake, configDocFail)
 		}
@@ -866,7 +866,7 @@ func TestTraefikConfigKeys(t *testing.T) {
 		// wrong reason and re-typing a key in the docs would slip through again.
 		fixtures := []docFile{
 			{rel: "fixture/table.md", data: []byte("# x\n\n| Name | Required |\n|---|---|\n| `max_session_lifetime_seconds` | no |\n")},
-			{rel: "fixture/yaml.md", data: []byte("```yml\ntraefik-oidc-auth:\n  trusted_proxies:\n    - 10.0.0.0/8\n```\n")},
+			{rel: "fixture/yaml.md", data: []byte("```yml\ngatepost:\n  trusted_proxies:\n    - 10.0.0.0/8\n```\n")},
 			{rel: "fixture/json.md", data: []byte("```json\n{\n  \"oidc_timeout_seconds\": 30\n}\n```\n")},
 		}
 		want := map[string]bool{
@@ -905,7 +905,7 @@ func TestTraefikConfigKeys(t *testing.T) {
 				"valid keys on either surface.\n" +
 				"\n" +
 				"```sh\n" +
-				"CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 go run ./cmd/extauth-server\n" +
+				"CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 go run ./cmd/gatepost-extauthz\n" +
 				"max_session_lifetime_seconds: 3600\n" +
 				"```\n" +
 				"\n" +
@@ -926,7 +926,7 @@ func TestTraefikConfigKeys(t *testing.T) {
 		// green. Plant it in an arbitrary column and prove it is now caught.
 		fixtures := []docFile{{
 			rel: "fixture/every-column.md",
-			data: []byte("| Option | Traefik YAML | `cmd/extauth-server` `CONFIG_FILE` |\n" +
+			data: []byte("| Option | Traefik YAML | `cmd/gatepost-extauthz` `CONFIG_FILE` |\n" +
 				"|---|---|---|\n" +
 				"| Total session lifetime bound | `maxSessionLifetimeSeconds` | `max_session_lifetime_seconds` |\n"),
 		}}

@@ -1,13 +1,13 @@
-# extauth-server
+# gatepost-extauthz
 
 Standalone ext_authz service exposing this plugin's OIDC logic to any gateway that supports Envoy's `ext_authz` contract (HTTP or gRPC), not just Traefik. See [ADR-0005](adr/0005-standalone-ext-authz-service/) for why this exists and why both transports are kept.
 
-Source: `cmd/extauth-server/`.
+Source: `cmd/gatepost-extauthz/`.
 
 ## Running
 
 ```sh
-CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/extauth-server
+CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/gatepost-extauthz
 ```
 
 - `CONFIG_FILE` — path to a **YAML** multi-client config (default `config.yaml`), see [Multi-client config](#multi-client-config) below. **Breaking:** the single-client JSON config is no longer supported; the process now always serves a `clients[]` map. Each entry carries the **same fields** as `.traefik.yml`'s `testData` / Traefik's dynamic plugin config (see `src/config/config.go` for all of them) under **camelCase YAML keys** — the same spelling Traefik itself uses, because both surfaces match the **Go field name** (see the casing note below). Values support `${VAR}` and `${file:/path}` expansion (same as Traefik). The two CA-bundle keys are `provider.cABundle` and `provider.cABundleFile` (note the initialism's capitals).
@@ -76,17 +76,17 @@ In YAML both spellings therefore work and mean the same thing: `revokeTokensOnLo
 :::
 
 :::note There is no `trustedProxies` in this example on purpose
-`trustedProxies` is a real config key, but in **HTTP mode it does nothing**: `cmd/extauth-server` gates the `X-Forwarded-*` rewrite on the **`TRUSTED_PROXIES` environment variable** (parsed in `main.go`, checked against the TCP peer address in `forwardedRequest`), not on the config key. This is a **different mechanism**, not a second spelling of one — see [`TRUSTED_PROXIES`](#trusted-proxies-http-mode-only) below. The Traefik plugin, by contrast, reads the `trustedProxies` config key.
+`trustedProxies` is a real config key, but in **HTTP mode it does nothing**: `cmd/gatepost-extauthz` gates the `X-Forwarded-*` rewrite on the **`TRUSTED_PROXIES` environment variable** (parsed in `main.go`, checked against the TCP peer address in `forwardedRequest`), not on the config key. This is a **different mechanism**, not a second spelling of one — see [`TRUSTED_PROXIES`](#trusted-proxies-http-mode-only) below. The Traefik plugin, by contrast, reads the `trustedProxies` config key.
 :::
 
 ## Network exposure
 
-`extauth-server` is called only by the gateway (Traefik/Envoy Gateway) — never directly by browsers or API clients. The gateway calls it internally on every request, then relays the allow/deny decision back to the actual client as if it came from the protected backend. Expose it via `ClusterIP` only; it needs no public listener, ingress, or externally-resolvable name. Restrict ingress to the gateway's namespace/pods with a `NetworkPolicy` — this is defense-in-depth alongside `TRUSTED_PROXIES` below, not a substitute for it (see Security review).
+`gatepost-extauthz` is called only by the gateway (Traefik/Envoy Gateway) — never directly by browsers or API clients. The gateway calls it internally on every request, then relays the allow/deny decision back to the actual client as if it came from the protected backend. Expose it via `ClusterIP` only; it needs no public listener, ingress, or externally-resolvable name. Restrict ingress to the gateway's namespace/pods with a `NetworkPolicy` — this is defense-in-depth alongside `TRUSTED_PROXIES` below, not a substitute for it (see Security review).
 
 ## `TRUSTED_PROXIES` (HTTP mode only)
 
 :::caution This is not the `trustedProxies` config key
-`extauth-server` reads the trusted-proxy allowlist **only** from the `TRUSTED_PROXIES` **environment variable** — `parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))` in `cmd/extauth-server/main.go`. The `trustedProxies` key in `CONFIG_FILE` has no effect on this path: it is decoded into `config.TrustedProxies`, which HTTP mode's `forwardedRequest()` never consults. The Traefik plugin, by contrast, is gated by the `trustedProxies` **config key** and has no environment variable. Two surfaces, two mechanisms — setting one does not set the other.
+`gatepost-extauthz` reads the trusted-proxy allowlist **only** from the `TRUSTED_PROXIES` **environment variable** — `parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))` in `cmd/gatepost-extauthz/main.go`. The `trustedProxies` key in `CONFIG_FILE` has no effect on this path: it is decoded into `config.TrustedProxies`, which HTTP mode's `forwardedRequest()` never consults. The Traefik plugin, by contrast, is gated by the `trustedProxies` **config key** and has no environment variable. Two surfaces, two mechanisms — setting one does not set the other.
 :::
 
 HTTP mode's `X-Forwarded-Method`/`X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Forwarded-Uri` headers are only honored when the request's TCP peer address matches an entry in `TRUSTED_PROXIES` — a comma-separated list of IPs and/or CIDR ranges (e.g. `TRUSTED_PROXIES=10.42.0.0/16` for a typical pod CIDR, or the specific IP(s) of your gateway's pods/Service). **Unset by default — meaning `X-Forwarded-*` headers are never honored from anyone**, and the server logs a startup warning. This is deliberately fail-closed: get the gateway's source CIDR right, or HTTP mode will treat every request as its own literal request (no path/method rewriting), which is safe but breaks routing for gateways that rely on those headers (Traefik `forwardAuth`).
@@ -112,10 +112,10 @@ If your gateway calls the auth backend with a fixed address and describes the re
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
-  name: extauth-forward
+  name: extauthz-forward
 spec:
   forwardAuth:
-    address: http://extauth-server.<namespace>.svc.cluster.local:9002/
+    address: http://gatepost-extauthz.<namespace>.svc.cluster.local:9002/
     authResponseHeaders:
     - X-Auth-Sub
     - X-Auth-Email
@@ -127,7 +127,7 @@ spec:
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
 metadata:
-  name: extauth
+  name: extauthz
 spec:
   targetRefs:
   - group: gateway.networking.k8s.io
@@ -136,7 +136,7 @@ spec:
   extAuth:
     grpc:
       backendRefs:
-      - name: extauth-server
+      - name: gatepost-extauthz
         port: 9003
 ```
 
@@ -149,7 +149,7 @@ Reviewed 2026-07-31 alongside the gRPC mode addition. Findings and fixes below; 
 ### Fixed during this review
 
 - **grpc-go authz bypass (GO-2026-4762)** — `google.golang.org/grpc@v1.78.0` had a known vulnerability ("Authorization bypass in gRPC-Go via missing leading slash in `:path`"), directly relevant to an authorization service. Bumped to `v1.82.1`. Also picked up a fix for GO-2026-6061 (xDS RBAC / HTTP2 transport). Verified via `govulncheck ./cmd/...` — 0 vulnerabilities in code actually called.
-- **Process-wide crash on panic** — grpc-go's default behavior is to crash the entire server on a handler panic (unlike `net/http`, which only aborts the one connection — [grpc-go#441](https://github.com/grpc/grpc-go/issues/441), by design, not going to change). Since `TraefikOidcAuth.ServeHTTP` has many code paths (JWT parsing, template rendering with user-controlled claims, JSON decoding), a single malformed or unexpected request could otherwise take the whole auth service offline. Added `recoveryInterceptor` (`grpc.UnaryInterceptor`) that recovers and returns a generic internal error instead. Covered by `TestRecoveryInterceptor_ConvertsPanicToError`.
+- **Process-wide crash on panic** — grpc-go's default behavior is to crash the entire server on a handler panic (unlike `net/http`, which only aborts the one connection — [grpc-go#441](https://github.com/grpc/grpc-go/issues/441), by design, not going to change). Since `Gatepost.ServeHTTP` has many code paths (JWT parsing, template rendering with user-controlled claims, JSON decoding), a single malformed or unexpected request could otherwise take the whole auth service offline. Added `recoveryInterceptor` (`grpc.UnaryInterceptor`) that recovers and returns a generic internal error instead. Covered by `TestRecoveryInterceptor_ConvertsPanicToError`.
 - **No socket-level timeouts** — both the HTTP listener and (implicitly, via `grpc.ConnectionTimeout`) the gRPC listener previously had no read/write/idle timeouts, leaving them exposed to slow-client resource exhaustion (slowloris-style). Added `ReadHeaderTimeout`/`ReadTimeout`/`WriteTimeout`/`IdleTimeout` to the HTTP server and `grpc.ConnectionTimeout` to the gRPC server.
 - **Integer overflow risk (gosec G115)** — `typev3.StatusCode(result.StatusCode)` cast an `int` to an `int32`-backed enum without bounds checking. Not exploitable today (status codes are always small), but a malformed/unexpected upstream value could wrap. Added an explicit bounds check (100–599) before the cast, falling back to 500.
 - **Path traversal flag (gosec G703)** on `os.ReadFile(path)` in `loadConfig` — `path` comes from `CONFIG_FILE`, operator-supplied deployment config, not attacker-controlled network input. Confirmed as a false positive for this threat model and suppressed with a documented `//nolint` (scoped to the one line, not the whole linter/package), matching the project's existing convention in `.golangci.yml` for `src/`'s own documented gosec exclusions.
@@ -161,17 +161,17 @@ Reviewed 2026-07-31 alongside the gRPC mode addition. Findings and fixes below; 
 - **Sessions are stateless** (`src/session/cookieSessionStorage.go` — encrypted into the session cookie via each client's `secret`, no server-side store). Horizontally scalable as long as all replicas mount the same multi-client config and secrets.
 - **Host-keyed multi-client:** Unknown Host → 403 (no default client). Tenant selection security depends on gateway-only reachability (`NetworkPolicy`) and a narrow `TRUSTED_PROXIES` for HTTP mode — Host / `X-Forwarded-Host` chooses which OIDC client config applies. Split Deployments for untrusted / cross-tenant clients.
 - **JWKS/OIDC-discovery caching** is per client handler (`src.New` once per client). HTTP and gRPC share the same Host→handler map, so a given client uses one discovery/JWKS cache.
-- **`httptest.NewRecorder()` per gRPC request** — in-memory buffer, no I/O, negligible overhead; this is the standard way to capture an `http.ResponseWriter`'s output without a real network hop, and is the correct choice here since `TraefikOidcAuth.ServeHTTP` writes directly to a `ResponseWriter` and cannot be restructured to return a response value without touching the core `src` package (out of scope, and would diverge Traefik-mode behavior from ext_authz-mode behavior).
+- **`httptest.NewRecorder()` per gRPC request** — in-memory buffer, no I/O, negligible overhead; this is the standard way to capture an `http.ResponseWriter`'s output without a real network hop, and is the correct choice here since `Gatepost.ServeHTTP` writes directly to a `ResponseWriter` and cannot be restructured to return a response value without touching the core `src` package (out of scope, and would diverge Traefik-mode behavior from ext_authz-mode behavior).
 - **Cookie header reconstruction in gRPC mode** (`buildHTTPRequest`, splitting merged header values on `,`) — correct for the common case. Envoy's `AttributeContext.HttpRequest.headers` map merges same-key headers with a comma per the HTTP spec; cookie-pairs cannot legally contain a literal comma (RFC 6265 `cookie-octet` grammar excludes it), so splitting a merged `Cookie` value back apart on `,` cannot corrupt a well-formed single `Cookie:` header (the overwhelmingly common case: one `Cookie` header, `;`-separated pairs, no comma splitting applied since there's nothing to split). Only a theoretical concern for non-conformant clients that send multiple raw `Cookie:` lines, which is a client bug, not a gap in this code.
 - **gRPC message size limits** — not set explicitly; grpc-go's default max receive size (4 MiB) already bounds request size at the transport layer before it reaches `buildHTTPRequest`.
 
 ### Known gaps (not fixed — flagged, needs a decision before production use)
 
-- **`extauth-server` is never reached directly by browsers/clients — only by the gateway.** The gateway (Traefik/Envoy Gateway) is always the intermediary: it calls `extauth-server` internally and relays the decision back to the client as if it came from the protected backend. This changes the risk calculus for the next two points — they're acceptable specifically because the network path is gateway-to-auth-server, not internet-to-auth-server. Expose only via `ClusterIP` (not `NodePort`/`LoadBalancer`); the `NodePort` used during live testing was solely to make the *gateway's* data plane reachable externally for the test, not `extauth-server` itself, which stayed `ClusterIP` throughout.
+- **`gatepost-extauthz` is never reached directly by browsers/clients — only by the gateway.** The gateway (Traefik/Envoy Gateway) is always the intermediary: it calls `gatepost-extauthz` internally and relays the decision back to the client as if it came from the protected backend. This changes the risk calculus for the next two points — they're acceptable specifically because the network path is gateway-to-auth-server, not internet-to-auth-server. Expose only via `ClusterIP` (not `NodePort`/`LoadBalancer`); the `NodePort` used during live testing was solely to make the *gateway's* data plane reachable externally for the test, not `gatepost-extauthz` itself, which stayed `ClusterIP` throughout.
 - **No TLS on either listener.** Acceptable because the only real client is the gateway over cluster-internal networking (see above), not because TLS never matters. Still not fine if the ext_authz call crosses a genuine trust boundary (e.g. a shared/multi-tenant cluster where other namespaces might route traffic through your gateway's network path, or the gateway and auth server sit in different clusters). Envoy Gateway supports `BackendTLSPolicy` for ext_authz backends (both HTTP and gRPC); not implemented here. Add if deploying across such a boundary.
-- **Recommendation not yet enforced by manifests in this repo: restrict ingress to `extauth-server` with a `NetworkPolicy`** allowing only the gateway's namespace/pods, mirroring the pattern this cluster already uses for protected backends (`allow-ingress-from-traefik`-style policies). `TRUSTED_PROXIES` (see above) covers the HTTP-mode header-spoofing angle specifically; a `NetworkPolicy` is still worth adding as defense-in-depth against anything else reaching the service (gRPC mode, or an HTTP-mode caller inside the trusted CIDR that isn't actually the gateway).
+- **Recommendation not yet enforced by manifests in this repo: restrict ingress to `gatepost-extauthz` with a `NetworkPolicy`** allowing only the gateway's namespace/pods, mirroring the pattern this cluster already uses for protected backends (`allow-ingress-from-traefik`-style policies). `TRUSTED_PROXIES` (see above) covers the HTTP-mode header-spoofing angle specifically; a `NetworkPolicy` is still worth adding as defense-in-depth against anything else reaching the service (gRPC mode, or an HTTP-mode caller inside the trusted CIDR that isn't actually the gateway).
 - **No rate limiting / request body size cap** at the HTTP-mode listener (gRPC mode inherits grpc-go's 4 MiB default; HTTP mode has none). Lower risk under the gateway-only assumption (the gateway is a single, mostly-trusted caller, not the open internet), but worth tracking if that assumption ever changes.
 
 ### Verified but out of scope to fix (pre-existing in `src/`)
 
-Confirmed no unbounded request-body reads or missing size limits were introduced by `cmd/extauth-server` beyond what `src/main.go`'s `ServeHTTP` already does for the Traefik plugin path. Any fix there belongs to the core package, not this wrapper.
+Confirmed no unbounded request-body reads or missing size limits were introduced by `cmd/gatepost-extauthz` beyond what `src/main.go`'s `ServeHTTP` already does for the Traefik plugin path. Any fix there belongs to the core package, not this wrapper.

@@ -16,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/errorPages"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/oidc"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/rules"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/errorPages"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/oidc"
+	"github.com/BlackDark/gatepost/src/rules"
+	"github.com/BlackDark/gatepost/src/session"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
 func TestTemplate_mapToJsonArray(t *testing.T) {
@@ -137,7 +137,7 @@ func TestServeHTTP_LoginUriDoesNotMatchPrefixCollisions(t *testing.T) {
 	}
 }
 
-func newRouteDispatchTestAuth(t *testing.T) *TraefikOidcAuth {
+func newRouteDispatchTestAuth(t *testing.T) *Gatepost {
 	t.Helper()
 	toa := newAuthBehaviorTestAuth(t)
 	toa.Config.LoginUri = ""
@@ -155,7 +155,7 @@ func newRouteDispatchTestAuth(t *testing.T) *TraefikOidcAuth {
 // -----------------------------------------------------------------------------
 
 type callbackHarness struct {
-	toa        *TraefikOidcAuth
+	toa        *Gatepost
 	server     *httptest.Server
 	active     bool
 	claims     map[string]interface{}
@@ -192,11 +192,11 @@ func newCallbackHarness(t *testing.T, tokenValidation string) *callbackHarness {
 		t.Fatal(err)
 	}
 
-	toa := &TraefikOidcAuth{
+	toa := &Gatepost{
 		logger: logging.CreateLogger(logging.LevelError),
 		Config: &config.Config{
 			Secret:                  "0123456789abcdef0123456789abcdef",
-			CookieNamePrefix:        "TraefikOidcAuth",
+			CookieNamePrefix:        "Gatepost",
 			Scopes:                  []string{"openid"},
 			CallbackUri:             "/oidc/callback",
 			PostLoginRedirectUri:    "/",
@@ -441,7 +441,7 @@ func TestHandleCallback_StaleAuthTimeFailsClosed(t *testing.T) {
 // item 3: front-channel logout needs sid or id_token_hint
 // -----------------------------------------------------------------------------
 
-func newFrontchannelTestAuth(t *testing.T) *TraefikOidcAuth {
+func newFrontchannelTestAuth(t *testing.T) *Gatepost {
 	t.Helper()
 	toa := newAuthBehaviorTestAuth(t)
 	toa.Config.Provider.RevokeTokensOnLogoutBool = false
@@ -716,7 +716,7 @@ func TestServeHTTP_AuthenticatedPathStillSetsRenderedHeaders(t *testing.T) {
 // through AuthorizationHeader, which makes getSessionForRequest validate it on
 // every request, so the authenticated and the unauthorized-but-valid-session
 // branches are both reachable.
-func newForwardPathTestAuth(t *testing.T) (*TraefikOidcAuth, func()) {
+func newForwardPathTestAuth(t *testing.T) (*Gatepost, func()) {
 	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -787,7 +787,7 @@ func TestForwardToUpstream_OrderSanitizeThenAttach(t *testing.T) {
 	}
 }
 
-func newIdentityHeaderTestAuth(t *testing.T) *TraefikOidcAuth {
+func newIdentityHeaderTestAuth(t *testing.T) *Gatepost {
 	t.Helper()
 	toa := newAuthBehaviorTestAuth(t)
 	toa.Config.LoginUri = ""
@@ -1763,7 +1763,7 @@ func TestSessionLifetimeStampDue(t *testing.T) {
 // rather than restarting from zero on every request.
 func TestLegacyTicket_GetsDurableCreatedAt(t *testing.T) {
 	storage := session.CreateCookieSessionStorage()
-	cfg := &config.Config{Secret: "0123456789abcdef0123456789abcdef", CookieNamePrefix: "TraefikOidcAuth"}
+	cfg := &config.Config{Secret: "0123456789abcdef0123456789abcdef", CookieNamePrefix: "Gatepost"}
 	logger := logging.CreateLogger(logging.LevelError)
 
 	// A ticket sealed before both purpose binding and the lifetime bounds: no
@@ -1785,7 +1785,7 @@ func TestLegacyTicket_GetsDurableCreatedAt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	toa := &TraefikOidcAuth{Config: cfg, logger: logger}
+	toa := &Gatepost{Config: cfg, logger: logger}
 	toa.Config.MaxSessionLifetimeSeconds = 3600
 	toa.Config.SessionIdleTimeoutSeconds = 0
 

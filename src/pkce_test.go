@@ -11,24 +11,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/oidc"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/oidc"
+	"github.com/BlackDark/gatepost/src/session"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
-func newPkceTestAuth(t *testing.T) *TraefikOidcAuth {
+func newPkceTestAuth(t *testing.T) *Gatepost {
 	t.Helper()
 	callback, err := url.Parse("https://app.example.com/oidc/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &TraefikOidcAuth{
+	return &Gatepost{
 		logger: logging.CreateLogger(logging.LevelError),
 		Config: &config.Config{
 			Secret:           "0123456789abcdef0123456789abcdef",
-			CookieNamePrefix: "TraefikOidcAuth",
+			CookieNamePrefix: "Gatepost",
 			Scopes:           []string{"openid"},
 			Provider: &config.ProviderConfig{
 				ClientId:    "test-client",
@@ -128,8 +128,8 @@ func TestRedirectToProvider_ClearsLegacyCodeVerifierCookies(t *testing.T) {
 	toa := newPkceTestAuth(t)
 	rw := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/page", nil)
-	req.AddCookie(&http.Cookie{Name: "TraefikOidcAuth.CodeVerifier", Value: "old"})
-	req.AddCookie(&http.Cookie{Name: "TraefikOidcAuth.CodeVerifier.abc", Value: "old2"})
+	req.AddCookie(&http.Cookie{Name: "Gatepost.CodeVerifier", Value: "old"})
+	req.AddCookie(&http.Cookie{Name: "Gatepost.CodeVerifier.abc", Value: "old2"})
 
 	toa.redirectToProvider(rw, req, "https://app.example.com/page", false)
 
@@ -139,7 +139,7 @@ func TestRedirectToProvider_ClearsLegacyCodeVerifierCookies(t *testing.T) {
 			expired[c.Name] = true
 		}
 	}
-	if !expired["TraefikOidcAuth.CodeVerifier"] || !expired["TraefikOidcAuth.CodeVerifier.abc"] {
+	if !expired["Gatepost.CodeVerifier"] || !expired["Gatepost.CodeVerifier.abc"] {
 		t.Fatalf("expected legacy CodeVerifier cookies expired, got %#v", expired)
 	}
 }
@@ -149,7 +149,7 @@ func TestRedirectToProvider_NoLegacyClearWhenPkceDisabled(t *testing.T) {
 	toa.Config.Provider.UsePkceBool = false
 	rw := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/page", nil)
-	req.AddCookie(&http.Cookie{Name: "TraefikOidcAuth.CodeVerifier", Value: "old"})
+	req.AddCookie(&http.Cookie{Name: "Gatepost.CodeVerifier", Value: "old"})
 
 	toa.redirectToProvider(rw, req, "https://app.example.com/page", false)
 
@@ -170,7 +170,7 @@ func (m *memSessionStorage) TryGetSession(logger *logging.Logger, cfg *config.Co
 	return nil, nil
 }
 
-func newCallbackTestAuth(t *testing.T, usePkce bool, tokenURL, introspectURL string) *TraefikOidcAuth {
+func newCallbackTestAuth(t *testing.T, usePkce bool, tokenURL, introspectURL string) *Gatepost {
 	t.Helper()
 	toa := newPkceTestAuth(t)
 	toa.Config.Provider.UsePkceBool = usePkce
@@ -241,7 +241,7 @@ func TestHandleCallback_ClearsLegacyCookiesOnlyWhenPkceEnabled(t *testing.T) {
 
 			rw := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "https://app.example.com/oidc/callback?code=abc&state="+url.QueryEscape(stateB64), nil)
-			req.AddCookie(&http.Cookie{Name: "TraefikOidcAuth.CodeVerifier", Value: "legacy"})
+			req.AddCookie(&http.Cookie{Name: "Gatepost.CodeVerifier", Value: "legacy"})
 			req.AddCookie(&http.Cookie{Name: getLoginCsrfCookieName(toa.Config, state.Csrf), Value: state.Csrf})
 
 			toa.handleCallback(rw, req)
@@ -311,7 +311,7 @@ func TestExchangeAuthCode_UsesStateVerifier(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/oidc/callback", nil)
 	// Cookie present must be ignored — verifier comes from state.
-	req.AddCookie(&http.Cookie{Name: "TraefikOidcAuth.CodeVerifier", Value: "wrong"})
+	req.AddCookie(&http.Cookie{Name: "Gatepost.CodeVerifier", Value: "wrong"})
 
 	_, err = exchangeAuthCode(toa, req, "auth-code", enc)
 	if err != nil {

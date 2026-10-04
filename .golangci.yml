@@ -109,7 +109,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/BlackDark/test-oidc-traefik-plugin
+        - github.com/BlackDark/gatepost
   exclusions:
     generated: lax
     paths:

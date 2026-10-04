@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	"github.com/BlackDark/gatepost/src/config"
 )
 
 type handlerFactory func(ctx context.Context, next http.Handler, cfg *config.Config, name string) (http.Handler, error)
@@ -14,7 +14,7 @@ func buildHostMap(ctx context.Context, cfg *multiConfig, next http.Handler, fact
 	out := make(map[string]http.Handler)
 	secrets := make(map[string]string, len(cfg.Clients))
 	for _, c := range cfg.Clients {
-		h, err := factory(ctx, next, c.Config, "extauth-server/"+c.ID)
+		h, err := factory(ctx, next, c.Config, "gatepost-extauthz/"+c.ID)
 		if err != nil {
 			return nil, fmt.Errorf("client %q: %w", c.ID, err)
 		}

@@ -1,18 +1,20 @@
-# OIDC Auth: Traefik Middleware + Standalone ext_authz Service
+# Gatepost
 
-[![E2E Tests](https://img.shields.io/github/actions/workflow/status/BlackDark/test-oidc-traefik-plugin/.github%2Fworkflows%2Fe2e-tests.yml?logo=github&label=E2E%20Tests&color=green)](https://github.com/BlackDark/test-oidc-traefik-plugin/actions/workflows/e2e-tests.yml)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/BlackDark/test-oidc-traefik-plugin/blob/main/LICENSE)
+OIDC authentication as a **Traefik plugin** and a **standalone ext_authz service**.
+
+[![E2E Tests](https://img.shields.io/github/actions/workflow/status/BlackDark/gatepost/.github%2Fworkflows%2Fe2e-tests.yml?logo=github&label=E2E%20Tests&color=green)](https://github.com/BlackDark/gatepost/actions/workflows/e2e-tests.yml)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/BlackDark/gatepost/blob/main/LICENSE)
 
 <p align="left" style="text-align:left;">
-  <a href="https://github.com/BlackDark/test-oidc-traefik-plugin">
+  <a href="https://github.com/BlackDark/gatepost">
     <img alt="Logo" src=".assets/icon.png" width="150" />
   </a>
 </p>
 
 This repo secures upstream services with OpenID Connect (acting as an OIDC relying party), in two forms sharing one core implementation:
 
-1. **Traefik middleware plugin** (`src/`) — the primary, mature component. A hardened fork of [sevensolutions/traefik-oidc-auth](https://github.com/sevensolutions/traefik-oidc-auth) (sealed OIDC state, PKCE-in-state, login CSRF, nonce, safer defaults — see `docs/adr/` and the delta list under [📚 Documentation](#-documentation)). This is what Traefik's plugin catalog loads.
-2. **Standalone ext_authz service** (`cmd/extauth-server/`) — **experimental.** Exposes the same OIDC/session/authorization logic behind Envoy's `ext_authz` contract (HTTP and gRPC modes), so it can run behind any gateway that speaks that protocol — Envoy Gateway's `SecurityPolicy`, and in the future the standardized [Gateway API `ExternalAuth` filter (GEP-1494)](https://gateway-api.sigs.k8s.io/geps/gep-1494/) once an implementation actually supports it — not just Traefik. See [`docs/extauth-server.md`](docs/extauth-server.md) for usage, gateway compatibility, and a security review.
+1. **Traefik middleware plugin** (`gatepost`, `src/`) — the primary, mature component. A hardened fork of [sevensolutions/traefik-oidc-auth](https://github.com/sevensolutions/traefik-oidc-auth) (sealed OIDC state, PKCE-in-state, login CSRF, nonce, safer defaults — see `docs/adr/` and the delta list under [📚 Documentation](#-documentation)). This is what Traefik's plugin catalog loads.
+2. **Standalone ext_authz service** (`gatepost-extauthz`, `cmd/gatepost-extauthz/`) — **experimental.** Exposes the same OIDC/session/authorization logic behind Envoy's `ext_authz` contract (HTTP and gRPC modes), so it can run behind any gateway that speaks that protocol — Envoy Gateway's `SecurityPolicy`, and in the future the standardized [Gateway API `ExternalAuth` filter (GEP-1494)](https://gateway-api.sigs.k8s.io/geps/gep-1494/) once an implementation actually supports it — not just Traefik. See [`docs/gatepost-extauthz.md`](docs/gatepost-extauthz.md) for usage, gateway compatibility, and a security review.
 
 Both share the same core packages (`src/oidc`, `src/session`, `src/rules`, `src/predicate`, `src/utils`) — one codebase, two transports, kept as one repo deliberately (see [ADR-0005](docs/adr/0005-standalone-ext-authz-service/) for why).
 
@@ -24,11 +26,11 @@ Both share the same core packages (`src/oidc`, `src/session`, `src/rules`, `src/
 > [!WARNING]
 > The Traefik middleware is under active development and breaking changes may occur. It is only tested against Traefik v3+.
 >
-> The standalone ext_authz service (`cmd/extauth-server`) is **experimental** — functionally verified end-to-end against real infrastructure (Traefik `forwardAuth` and Envoy Gateway `SecurityPolicy`, both HTTP and gRPC modes, with real IdP logins), but newer and less battle-tested than the Traefik middleware itself. See its docs for known gaps before running it in production.
+> The standalone ext_authz service (`cmd/gatepost-extauthz`) is **experimental** — functionally verified end-to-end against real infrastructure (Traefik `forwardAuth` and Envoy Gateway `SecurityPolicy`, both HTTP and gRPC modes, with real IdP logins), but newer and less battle-tested than the Traefik middleware itself. See its docs for known gaps before running it in production.
 
 ## Traefik middleware
 
-Used as a Traefik plugin (`import: github.com/BlackDark/test-oidc-traefik-plugin/src` in Traefik's static/plugin config). All hardening decisions are recorded in [`docs/adr/`](docs/adr/).
+Catalog name: `gatepost`. Used as a Traefik plugin (`import: github.com/BlackDark/gatepost/src` in Traefik's static/plugin config, and `gatepost:` as the dynamic-config key). All hardening decisions are recorded in [`docs/adr/`](docs/adr/).
 
 ### Tested Providers
 
@@ -79,14 +81,14 @@ Also fork-local and **breaking** since `v0.20.0`: `UnauthorizedBehavior` is spli
 - **Fork tags are independent of upstream tags.** A `v0.22.0` in this repository is a fork release with no upstream counterpart; an upstream tag of the same number may describe entirely different code. Never assume the two line up.
 - **Breaking changes are recorded in [`CHANGELOG.md`](CHANGELOG.md)** and marked explicitly with a **BREAKING CHANGE** note. Read it before upgrading across minor versions.
 - Security reports go through the private channels in [`SECURITY.md`](SECURITY.md) — not upstream's, and not a public issue.
-- `github.com/BlackDark/test-oidc-traefik-plugin` is a **placeholder** repo/module name pending a final organisation rename. If you depend on it, expect the import path to change; pin a specific version and re-check this section when you upgrade.
-- The standalone `ext_authz` service (`cmd/extauth-server`) remains **experimental** even though a release image is published from `v*` tags. A published image does not imply API stability.
+- The project is **named `gatepost`**, not `test-oidc-traefik-plugin`. The module path, the Traefik catalog name, the dynamic-config key, and the standalone binary name were all renamed in one breaking change: `github.com/BlackDark/test-oidc-traefik-plugin` → `github.com/BlackDark/gatepost`, plugin key `traefik-oidc-auth:` → `gatepost:`, `cmd/extauth-server` → `cmd/gatepost-extauthz`. Existing Traefik configs using the old key stop working — rename the key, not just the import.
+- The standalone `ext_authz` service (`cmd/gatepost-extauthz`) remains **experimental** even though a release image is published from `v*` tags. A published image does not imply API stability.
 
 ## Standalone ext_authz service (experimental)
 
-`cmd/extauth-server` runs the same OIDC logic as a standalone binary speaking Envoy's `ext_authz` protocol (HTTP or gRPC), for use behind Envoy Gateway, Istio, Contour, or any other `ext_authz`-compatible gateway — anything that isn't Traefik. Intended primarily as a path toward Gateway API's standardized external-auth filter once a real implementation of it exists (currently unimplemented everywhere checked — see [ADR-0005](docs/adr/0005-standalone-ext-authz-service/)); today, wire it via each gateway's own vendor-specific mechanism (e.g. Envoy Gateway's `SecurityPolicy`).
+`cmd/gatepost-extauthz` runs the same OIDC logic as a standalone binary speaking Envoy's `ext_authz` protocol (HTTP or gRPC), for use behind Envoy Gateway, Istio, Contour, or any other `ext_authz`-compatible gateway — anything that isn't Traefik. Intended primarily as a path toward Gateway API's standardized external-auth filter once a real implementation of it exists (currently unimplemented everywhere checked — see [ADR-0005](docs/adr/0005-standalone-ext-authz-service/)); today, wire it via each gateway's own vendor-specific mechanism (e.g. Envoy Gateway's `SecurityPolicy`).
 
-See [`docs/extauth-server.md`](docs/extauth-server.md) for:
+See [`docs/gatepost-extauthz.md`](docs/gatepost-extauthz.md) for:
 - Running it, and env var reference
 - Which mode to use for which gateway (with a known, currently-unfixed Envoy Gateway HTTP-mode bug to avoid)
 - A full security review (findings fixed, findings accepted as-is, and known gaps)
@@ -131,20 +133,20 @@ Changes will be reloaded automatically and you should see some debug output in t
 ### Standalone ext_authz service
 
 ```sh
-CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/extauth-server
+CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/gatepost-extauthz
 ```
 
-See [`docs/extauth-server.md`](docs/extauth-server.md) for config format, `TRUSTED_PROXIES`, and gateway-specific wiring examples (Traefik `forwardAuth`, Envoy Gateway `SecurityPolicy`).
+See [`docs/gatepost-extauthz.md`](docs/gatepost-extauthz.md) for config format, `TRUSTED_PROXIES`, and gateway-specific wiring examples (Traefik `forwardAuth`, Envoy Gateway `SecurityPolicy`).
 
-Run its test suite from `cmd/extauth-server`:
+Run its test suite from `cmd/gatepost-extauthz`:
 
 ```
-task test:extauth
+task test:extauthz
 ```
 
 ## Attribution
 
-The Traefik middleware in `src/` is a fork of [sevensolutions/traefik-oidc-auth](https://github.com/sevensolutions/traefik-oidc-auth). Credit to the original author for the base implementation; this fork's changes (security hardening in `docs/adr/`, and the standalone `cmd/extauth-server` service) are independent additions on top of it, not upstream contributions — if you're looking for the original project, go there.
+The Traefik middleware in `src/` is a fork of [sevensolutions/traefik-oidc-auth](https://github.com/sevensolutions/traefik-oidc-auth). Credit to the original author for the base implementation; this fork's changes (security hardening in `docs/adr/`, and the standalone `cmd/gatepost-extauthz` service) are independent additions on top of it, not upstream contributions — if you're looking for the original project, go there.
 
 ## ☕ Support
 

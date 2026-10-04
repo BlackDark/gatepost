@@ -1,9 +1,9 @@
-module github.com/BlackDark/test-oidc-traefik-plugin/cmd/extauth-server
+module github.com/BlackDark/gatepost/cmd/gatepost-extauthz
 
 go 1.26.8
 
 require (
-	github.com/BlackDark/test-oidc-traefik-plugin v0.21.1
+	github.com/BlackDark/gatepost v0.21.1
 	github.com/envoyproxy/go-control-plane/envoy v1.39.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260729162451-8efbd57d26e0
 	google.golang.org/grpc v1.83.2
@@ -24,4 +24,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/BlackDark/test-oidc-traefik-plugin => ../..
+replace github.com/BlackDark/gatepost => ../..

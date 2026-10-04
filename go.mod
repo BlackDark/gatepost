@@ -1,4 +1,4 @@
-module github.com/BlackDark/test-oidc-traefik-plugin
+module github.com/BlackDark/gatepost
 
 go 1.26.8
 

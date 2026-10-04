@@ -11,14 +11,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/session"
 )
 
 func TestSetChunkedCookiesNonChunked(t *testing.T) {
 	config := &config.Config{
-		CookieNamePrefix: "TraefikOidcAuth",
+		CookieNamePrefix: "Gatepost",
 		SessionCookie: &config.SessionCookieConfig{
 			Path:     "/",
 			Domain:   "",
@@ -31,18 +31,18 @@ func TestSetChunkedCookiesNonChunked(t *testing.T) {
 
 	rw := newMockResponseWriter()
 
-	setChunkedCookies(config, rw, "TraefikOidcAuth.Session", "some-short-value")
+	setChunkedCookies(config, rw, "Gatepost.Session", "some-short-value")
 
 	setCookieHeader := rw.HeaderMap.Get("Set-Cookie")
 
-	if setCookieHeader != "TraefikOidcAuth.Session=some-short-value; Path=/; HttpOnly; Secure" {
+	if setCookieHeader != "Gatepost.Session=some-short-value; Path=/; HttpOnly; Secure" {
 		t.Fail()
 	}
 }
 
 func TestSetChunkedCookiesChunked(t *testing.T) {
 	config := &config.Config{
-		CookieNamePrefix: "TraefikOidcAuth",
+		CookieNamePrefix: "Gatepost",
 		SessionCookie: &config.SessionCookieConfig{
 			Path:     "/",
 			Domain:   "",
@@ -57,7 +57,7 @@ func TestSetChunkedCookiesChunked(t *testing.T) {
 
 	longValue := randomFixedLengthString(4000)
 
-	setChunkedCookies(config, rw, "TraefikOidcAuth.Session", longValue)
+	setChunkedCookies(config, rw, "Gatepost.Session", longValue)
 
 	setCookieHeader := rw.HeaderMap.Values("Set-Cookie")
 
@@ -65,13 +65,13 @@ func TestSetChunkedCookiesChunked(t *testing.T) {
 		t.Fail()
 	}
 
-	if setCookieHeader[0] != "TraefikOidcAuth.Session.Chunks=2; Path=/; HttpOnly; Secure" {
+	if setCookieHeader[0] != "Gatepost.Session.Chunks=2; Path=/; HttpOnly; Secure" {
 		t.Fail()
 	}
-	if setCookieHeader[1] != fmt.Sprintf("TraefikOidcAuth.Session.1=%s; Path=/; HttpOnly; Secure", longValue[:3072]) {
+	if setCookieHeader[1] != fmt.Sprintf("Gatepost.Session.1=%s; Path=/; HttpOnly; Secure", longValue[:3072]) {
 		t.Fail()
 	}
-	if setCookieHeader[2] != fmt.Sprintf("TraefikOidcAuth.Session.2=%s; Path=/; HttpOnly; Secure", longValue[3072:]) {
+	if setCookieHeader[2] != fmt.Sprintf("Gatepost.Session.2=%s; Path=/; HttpOnly; Secure", longValue[3072:]) {
 		t.Fail()
 	}
 }
@@ -83,23 +83,23 @@ func TestReadChunkedCookieOrdered(t *testing.T) {
 	}
 
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.Chunks",
+		Name:  "Gatepost.Session.Chunks",
 		Value: "3",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.1",
+		Name:  "Gatepost.Session.1",
 		Value: "111",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.2",
+		Name:  "Gatepost.Session.2",
 		Value: "222",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.3",
+		Name:  "Gatepost.Session.3",
 		Value: "333",
 	})
 
-	cookieValue, err := readChunkedCookie(req, "TraefikOidcAuth.Session")
+	cookieValue, err := readChunkedCookie(req, "Gatepost.Session")
 	if err != nil {
 		t.Fail()
 	}
@@ -116,23 +116,23 @@ func TestReadChunkedCookieUnordered(t *testing.T) {
 	}
 
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.3",
+		Name:  "Gatepost.Session.3",
 		Value: "333",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.Chunks",
+		Name:  "Gatepost.Session.Chunks",
 		Value: "3",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.1",
+		Name:  "Gatepost.Session.1",
 		Value: "111",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.2",
+		Name:  "Gatepost.Session.2",
 		Value: "222",
 	})
 
-	cookieValue, err := readChunkedCookie(req, "TraefikOidcAuth.Session")
+	cookieValue, err := readChunkedCookie(req, "Gatepost.Session")
 	if err != nil {
 		t.Fail()
 	}
@@ -149,19 +149,19 @@ func TestReadChunkedCookieWithIncompleteChunks(t *testing.T) {
 	}
 
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.Chunks",
+		Name:  "Gatepost.Session.Chunks",
 		Value: "3",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.1",
+		Name:  "Gatepost.Session.1",
 		Value: "111",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.2",
+		Name:  "Gatepost.Session.2",
 		Value: "222",
 	})
 
-	cookieValue, err := readChunkedCookie(req, "TraefikOidcAuth.Session")
+	cookieValue, err := readChunkedCookie(req, "Gatepost.Session")
 
 	// readChunkedCookie should fail
 	if err == nil || cookieValue != "" {
@@ -176,19 +176,19 @@ func TestReadChunkedCookieWithNoCount(t *testing.T) {
 	}
 
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.3",
+		Name:  "Gatepost.Session.3",
 		Value: "333",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.1",
+		Name:  "Gatepost.Session.1",
 		Value: "111",
 	})
 	req.AddCookie(&http.Cookie{
-		Name:  "TraefikOidcAuth.Session.2",
+		Name:  "Gatepost.Session.2",
 		Value: "222",
 	})
 
-	cookieValue, err := readChunkedCookie(req, "TraefikOidcAuth.Session")
+	cookieValue, err := readChunkedCookie(req, "Gatepost.Session")
 
 	// readChunkedCookie should fail
 	if err == nil || cookieValue != "" {
@@ -228,7 +228,7 @@ func randomFixedLengthString(n int) string {
 }
 
 func TestClearLegacyCodeVerifierCookies_ExpiresHostnameAndHostOnly(t *testing.T) {
-	cfg := &config.Config{CookieNamePrefix: "TraefikOidcAuth"}
+	cfg := &config.Config{CookieNamePrefix: "Gatepost"}
 	callback, err := url.Parse("https://app.example.com:8443/oidc/callback")
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestClearLegacyCodeVerifierCookies_ExpiresHostnameAndHostOnly(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.AddCookie(&http.Cookie{Name: "TraefikOidcAuth.CodeVerifier", Value: "legacy"})
+	req.AddCookie(&http.Cookie{Name: "Gatepost.CodeVerifier", Value: "legacy"})
 
 	clearLegacyCodeVerifierCookies(cfg, rw, req, callback)
 
@@ -246,7 +246,7 @@ func TestClearLegacyCodeVerifierCookies_ExpiresHostnameAndHostOnly(t *testing.T)
 	hasHostname := false
 	hasHostOnly := false
 	for _, raw := range headers {
-		if !strings.HasPrefix(raw, "TraefikOidcAuth.CodeVerifier=") {
+		if !strings.HasPrefix(raw, "Gatepost.CodeVerifier=") {
 			continue
 		}
 		lower := strings.ToLower(raw)
@@ -268,7 +268,7 @@ func TestClearLegacyCodeVerifierCookies_ExpiresHostnameAndHostOnly(t *testing.T)
 }
 
 func TestValidateLoginCsrf(t *testing.T) {
-	cfg := &config.Config{CookieNamePrefix: "TraefikOidcAuth"}
+	cfg := &config.Config{CookieNamePrefix: "Gatepost"}
 	csrf := "abc123csrfvalue"
 
 	t.Run("ok", func(t *testing.T) {
@@ -301,7 +301,7 @@ func TestValidateLoginCsrf(t *testing.T) {
 
 func testCookieConfig() *config.Config {
 	return &config.Config{
-		CookieNamePrefix: "TraefikOidcAuth",
+		CookieNamePrefix: "Gatepost",
 		SessionCookie: &config.SessionCookieConfig{
 			Path:     "/",
 			Domain:   "",
@@ -314,7 +314,7 @@ func testCookieConfig() *config.Config {
 }
 
 func TestGetChunkedCookieCount(t *testing.T) {
-	const name = "TraefikOidcAuth.Session"
+	const name = "Gatepost.Session"
 
 	tests := []struct {
 		name      string
@@ -362,7 +362,7 @@ func TestGetChunkedCookieCount(t *testing.T) {
 
 func TestClearChunkedCookieHostileChunkCountIsBounded(t *testing.T) {
 	cfg := testCookieConfig()
-	const name = "TraefikOidcAuth.Session"
+	const name = "Gatepost.Session"
 
 	for _, hostile := range []string{"2000000000", strconv.Itoa(MaxSessionCookieChunks + 1), "-1", "abc"} {
 		t.Run(hostile, func(t *testing.T) {
@@ -382,7 +382,7 @@ func TestClearChunkedCookieHostileChunkCountIsBounded(t *testing.T) {
 
 func TestClearChunkedCookieMaxChunks(t *testing.T) {
 	cfg := testCookieConfig()
-	const name = "TraefikOidcAuth.Session"
+	const name = "Gatepost.Session"
 
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/", nil)
 	req.AddCookie(&http.Cookie{Name: name + ".Chunks", Value: strconv.Itoa(MaxSessionCookieChunks)})
@@ -416,7 +416,7 @@ func TestClearChunkedCookieWithoutSession(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected exactly 1 Set-Cookie header, got %d: %v", len(got), got)
 	}
-	if !strings.HasPrefix(got[0], "TraefikOidcAuth.Session=;") {
+	if !strings.HasPrefix(got[0], "Gatepost.Session=;") {
 		t.Fatalf("unexpected cookie: %s", got[0])
 	}
 }
@@ -453,7 +453,7 @@ func TestChunkedCookieRoundTrip(t *testing.T) {
 }
 
 func TestReadChunkedCookieMissingChunk(t *testing.T) {
-	const name = "TraefikOidcAuth.Session"
+	const name = "Gatepost.Session"
 
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/", nil)
 	req.AddCookie(&http.Cookie{Name: name + ".Chunks", Value: "3"})
@@ -470,7 +470,7 @@ func TestReadChunkedCookieMissingChunk(t *testing.T) {
 }
 
 func TestReadChunkedCookieRejectsHostileCount(t *testing.T) {
-	const name = "TraefikOidcAuth.Session"
+	const name = "Gatepost.Session"
 
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com/", nil)
 	req.AddCookie(&http.Cookie{Name: name + ".Chunks", Value: "2000000000"})
@@ -756,14 +756,14 @@ func TestLoginCsrfCookieAttributes(t *testing.T) {
 }
 
 func TestClearLegacyCodeVerifierCookiesBounded(t *testing.T) {
-	cfg := &config.Config{CookieNamePrefix: "TraefikOidcAuth"}
+	cfg := &config.Config{CookieNamePrefix: "Gatepost"}
 	callback, err := url.Parse("https://app.example.com:8443/oidc/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "https://app.example.com:8443/oidc/callback", nil)
 	for i := 0; i < 1000; i++ {
-		req.AddCookie(&http.Cookie{Name: fmt.Sprintf("TraefikOidcAuth.CodeVerifier.%d", i), Value: "x"})
+		req.AddCookie(&http.Cookie{Name: fmt.Sprintf("Gatepost.CodeVerifier.%d", i), Value: "x"})
 	}
 
 	rw := newMockResponseWriter()

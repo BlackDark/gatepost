@@ -53,11 +53,11 @@ jobs:
       # go.mod drifted - proven by mutation. Note git does NOT error on a
       # pathspec that matches nothing, so a wrong path here fails open; the
       # names below are the ones the module actually has.
-      - name: Verify module integrity (extauth-server)
-        working-directory: ./cmd/extauth-server
+      - name: Verify module integrity (gatepost-extauthz)
+        working-directory: ./cmd/gatepost-extauthz
         run: |
           go mod verify
-          git -C ../.. diff --exit-code -- cmd/extauth-server/go.mod cmd/extauth-server/go.sum
+          git -C ../.. diff --exit-code -- cmd/gatepost-extauthz/go.mod cmd/gatepost-extauthz/go.sum
 
       - name: Build
         run: go build ./...
@@ -70,16 +70,16 @@ jobs:
       - name: Test with the Go CLI
         run: go test -count=1 -race ./...
 
-      - name: Build extauth-server
-        working-directory: ./cmd/extauth-server
+      - name: Build gatepost-extauthz
+        working-directory: ./cmd/gatepost-extauthz
         run: go build ./...
 
-      - name: Test extauth-server
-        working-directory: ./cmd/extauth-server
+      - name: Test gatepost-extauthz
+        working-directory: ./cmd/gatepost-extauthz
         run: go test -count=1 -race ./...
 
   docker:
-    name: extauth-server image
+    name: gatepost-extauthz image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -103,7 +103,7 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: cmd/extauth-server/Dockerfile
+          file: cmd/gatepost-extauthz/Dockerfile
           platforms: linux/amd64,linux/arm64
           outputs: type=cacheonly
 
@@ -113,10 +113,10 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: cmd/extauth-server/Dockerfile
+          file: cmd/gatepost-extauthz/Dockerfile
           platforms: linux/amd64
           load: true
-          tags: extauth-server:ci
+          tags: gatepost-extauthz:ci
 
       # There is no --help flag to smoke test against, so the two observable
       # behaviours of the shipped artifact are: it refuses to come up without a
@@ -125,8 +125,8 @@ jobs:
       - name: Smoke test - refuses to start without a config
         run: |
           set -euo pipefail
-          output="$(docker run --rm extauth-server:ci 2>&1)" && {
-            echo "::error::extauth-server started without a config file"
+          output="$(docker run --rm gatepost-extauthz:ci 2>&1)" && {
+            echo "::error::gatepost-extauthz started without a config file"
             exit 1
           }
           echo "$output"
@@ -136,7 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           cfg="$(mktemp --suffix=.yaml)"
-          # This branch switched extauth-server from a JSON CONFIG_FILE to the
+          # This branch switched gatepost-extauthz from a JSON CONFIG_FILE to the
           # Host-keyed multi-client YAML surface, so the smoke config must be YAML.
           # Note for whoever merges this: main's copy of this step still writes
           # JSON and must be reconciled at merge time - a JSON body here is
@@ -159,7 +159,7 @@ jobs:
             -e LISTEN_ADDR=:9002 \
             -e CONFIG_FILE=/tmp/config.yaml \
             -v "$cfg:/tmp/config.yaml:ro" \
-            extauth-server:ci)"
+            gatepost-extauthz:ci)"
           trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
           for _ in $(seq 1 30); do
             logs="$(docker logs "$container" 2>&1 || true)"
@@ -169,7 +169,7 @@ jobs:
             # rejected, so assert on the configured client id appearing in the
             # startup log rather than only on "it started".
             if grep -qiE "config error|init error" <<<"$logs"; then
-              echo "::error::extauth-server reported a config error"
+              echo "::error::gatepost-extauthz reported a config error"
               echo "$logs"
               exit 1
             fi
@@ -178,10 +178,10 @@ jobs:
               # mis-keyed config still starts and still listens, so "it booted"
               # alone does not prove the loader was exercised.
               if grep -q "smoke.example.com" <<<"$logs"; then
-                echo "extauth-server image booted, reported a listener, and loaded the configured client"
+                echo "gatepost-extauthz image booted, reported a listener, and loaded the configured client"
                 exit 0
               fi
-              echo "::error::extauth-server listened but never registered the configured host"
+              echo "::error::gatepost-extauthz listened but never registered the configured host"
               echo "$logs"
               exit 1
             fi
@@ -192,7 +192,7 @@ jobs:
             # anchored `^...$` match could never fire and the loop always ran
             # the full 30 seconds before reporting the same failure.
             if ! docker ps --no-trunc --format '{{.ID}}' | grep -qxF "$container"; then
-              echo "::error::extauth-server exited before reporting a listener"
+              echo "::error::gatepost-extauthz exited before reporting a listener"
               wait "$container" 2>/dev/null || true
               docker logs "$container" 2>&1 || true
               exit 1
@@ -202,5 +202,5 @@ jobs:
           # Diagnostics must never mask the real failure, so tolerate a
           # container that already exited and was removed.
           docker logs "$container" 2>&1 || true
-          echo "::error::extauth-server never reported a listening address"
+          echo "::error::gatepost-extauthz never reported a listening address"
           exit 1

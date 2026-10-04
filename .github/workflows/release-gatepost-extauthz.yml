@@ -1,4 +1,4 @@
-name: Release extauth-server image
+name: Release gatepost-extauthz image
 
 on:
   release:
@@ -15,7 +15,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: release-extauth-server-${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || inputs.tag || github.run_id }}
+  group: release-gatepost-extauthz-${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || inputs.tag || github.run_id }}
   # Must stay false. The group keys on the tag, and one release fires two
   # events for it (`push: tags: ['v*']` and `release: published`) that land in
   # the same group, so the newer event killed the older one mid-publish. Runs
@@ -171,13 +171,13 @@ jobs:
         run: |
           version="${TAG#v}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}/extauth-server" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}/gatepost-extauthz" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: cmd/extauth-server/Dockerfile
+          file: cmd/gatepost-extauthz/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

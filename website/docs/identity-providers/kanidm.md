@@ -82,7 +82,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://idm.example.com/oauth2/openid/<client_id>"
             clientId: "<client_id>"
@@ -98,7 +98,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://idm.example.com/oauth2/openid/<client_id>"
             clientId: "<client_id>"
@@ -114,7 +114,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           logLevel: DEBUG
           callbackUri: "https://login.example.com/oidc/callback"
           sessionCookie:

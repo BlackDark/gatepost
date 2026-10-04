@@ -20,7 +20,7 @@ workspaces/
 # Dependencies and build output
 **/node_modules
 bin/
-cmd/extauth-server/extauth-server
+cmd/gatepost-extauthz/gatepost-extauthz
 
 # Local review/e2e scratch space: e2e/tests/mock-oidc-tls/certificates holds a
 # generated throwaway CA private key, playwright-report holds run artifacts.

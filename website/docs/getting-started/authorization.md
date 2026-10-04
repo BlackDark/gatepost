@@ -7,7 +7,7 @@ sidebar_position: 5
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-As soon as a user is authenticated it is allowed to use the application, secured by *traefik-oidc-auth*.
+As soon as a user is authenticated it is allowed to use the application, secured by *gatepost*.
 But you may have multiple applications and you may want to specify a more granular definition of who is allowed to access which application.
 This can be achieved using the plugin's `ClaimAssertion`s.
 
@@ -115,7 +115,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://your-idp.com"
             clientId: "<YourClientId>"
@@ -131,8 +131,8 @@ http:
 
 **Docker Labels**
 ```
-traefik.http.middlewares.oidc-auth.traefik-oidc-auth.authorization.assertClaims[0].name=roles"
-traefik.http.middlewares.oidc-auth.traefik-oidc-auth.authorization.assertClaims[0].anyOf=admin,media"
+traefik.http.middlewares.oidc-auth.gatepost.authorization.assertClaims[0].name=roles"
+traefik.http.middlewares.oidc-auth.gatepost.authorization.assertClaims[0].anyOf=admin,media"
 ```
 
 </TabItem>
@@ -252,7 +252,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://your-idp.com"
             clientId: "<YourClientId>"

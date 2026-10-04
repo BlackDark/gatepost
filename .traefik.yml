@@ -1,14 +1,14 @@
 # The name of your plugin as displayed in the Plugins Catalog web UI.
-displayName: OIDC Authentication (hardened)
+displayName: Gatepost (OIDC authentication)
 
 # For now, `middleware` is the only type available.
 type: middleware
 
 # The import path of your plugin.
-import: github.com/BlackDark/test-oidc-traefik-plugin/src
+import: github.com/BlackDark/gatepost/src
 
 # A brief description of what your plugin is doing.
-summary: "Hardened fork of traefik-oidc-auth: sealed OIDC state, PKCE-in-state, login CSRF, nonce, safer defaults."
+summary: "OIDC relying party for Traefik, hardened from traefik-oidc-auth: sealed OIDC state, PKCE-in-state, login CSRF, nonce, safer defaults."
 
 # Medias associated to the plugin (optional)
 iconPath: .assets/icon.png

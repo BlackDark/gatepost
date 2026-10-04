@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
 // stateLifetime bounds how long a sealed login state stays usable. The state is

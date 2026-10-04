@@ -2,7 +2,7 @@
 
 accountId="$CF_ACCOUNT_ID"
 apiKey="$CF_API_KEY"
-projectName="traefik-oidc-auth"
+projectName="gatepost"
 
 if [ -z "$accountId" ]; then
   echo "Please specify your Cloudflare Account Id by running: export CF_ACCOUNT_ID=xxx"

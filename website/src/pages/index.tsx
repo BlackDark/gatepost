@@ -105,7 +105,7 @@ export default function Home(): JSX.Element {
           </Link>
           <Link
             className="button button--secondary button--lg"
-            href="https://github.com/sevensolutions/traefik-oidc-auth"
+            href="https://github.com/BlackDark/gatepost"
           >
             GitHub
           </Link>

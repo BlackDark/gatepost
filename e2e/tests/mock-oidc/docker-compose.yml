@@ -29,7 +29,7 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "../../../workspaces/configs/traefik-config.yml:/etc/traefik/traefik.yml:ro"
-      - "../../..:/plugins-local/src/github.com/BlackDark/test-oidc-traefik-plugin:ro"
+      - "../../..:/plugins-local/src/github.com/BlackDark/gatepost:ro"
       - "../../.http.yml:/etc/traefik/configs/http.yml:ro"
       - "./data:/data:ro"
     environment:

@@ -19,12 +19,12 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/errorPages"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/rules"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/errorPages"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/rules"
+	"github.com/BlackDark/gatepost/src/session"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
 // Will be called by traefik
@@ -52,7 +52,7 @@ func CreateConfig() *config.Config {
 		LogoutUri:             "/logout",
 		FrontChannelLogoutUri: "/frontchannel-logout",
 		PostLogoutRedirectUri: "/",
-		CookieNamePrefix:      "TraefikOidcAuth",
+		CookieNamePrefix:      "Gatepost",
 		SessionCookie: &config.SessionCookieConfig{
 			Path:     "/",
 			Domain:   "",
@@ -90,7 +90,7 @@ func New(uctx context.Context, next http.Handler, cfg *config.Config, name strin
 
 	// Hack: Trick the traefik plugin catalog to successfully execute this method with the testData from .traefik.yml.
 	if cfg.Provider.Url == "https://..." {
-		return &TraefikOidcAuth{
+		return &Gatepost{
 			next: next,
 		}, nil
 	}
@@ -266,7 +266,7 @@ func New(uctx context.Context, next http.Handler, cfg *config.Config, name strin
 	// makes two middlewares on one domain overwrite each other's session cookie.
 	if cfg.CookieNamePrefix == "" {
 		sum := sha256.Sum256([]byte(cfg.Provider.ClientId))
-		cfg.CookieNamePrefix = "TraefikOidcAuth." + hex.EncodeToString(sum[:4])
+		cfg.CookieNamePrefix = "Gatepost." + hex.EncodeToString(sum[:4])
 		logger.Log(logging.LevelInfo, "cookieNamePrefix is empty, derived %q from the clientId so this instance gets its own session cookie.", cfg.CookieNamePrefix)
 	}
 
@@ -397,7 +397,7 @@ func New(uctx context.Context, next http.Handler, cfg *config.Config, name strin
 	logger.Log(logging.LevelInfo, "ready provider=%s clientId=%s callback=%s cookiePrefix=%s",
 		parsedURL.String(), cfg.Provider.ClientId, cfg.CallbackUri, cfg.CookieNamePrefix)
 
-	return &TraefikOidcAuth{
+	return &Gatepost{
 		logger:                      logger,
 		next:                        next,
 		httpClient:                  httpClient,

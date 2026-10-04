@@ -1,4 +1,4 @@
-# Example multi-client config for extauth-server.
+# Example multi-client config for gatepost-extauthz.
 # Mount secrets as files; prefer ${file:...} over env for client secrets / cookie secrets.
 clients:
   - id: grafana

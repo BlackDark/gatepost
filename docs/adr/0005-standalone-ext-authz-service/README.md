@@ -1,4 +1,4 @@
-# 0005. Standalone ext_authz service (`cmd/extauth-server`)
+# 0005. Standalone ext_authz service (`cmd/gatepost-extauthz`)
 
 **Status:** Accepted
 **Date:** 2026-07-31
@@ -16,10 +16,10 @@ Two ext_authz transports exist, verified against real infrastructure ([Envoy Gat
 
 ## Decision
 
-1. Add `cmd/extauth-server`, a separate `main` package that calls `src.New(...)` unchanged and exposes it over both transports:
+1. Add `cmd/gatepost-extauthz`, a separate `main` package that calls `src.New(...)` unchanged and exposes it over both transports:
    - **HTTP mode** (`LISTEN_ADDR`, default `:9002`) — wraps the handler in `forwardedRequest()`, which rewrites `req.Method`/`req.URL`/`req.RequestURI` from `X-Forwarded-Method/Proto/Host/Uri` headers before calling `ServeHTTP`. This is required for gateways (confirmed: Traefik `forwardAuth`) that always call the auth backend at a fixed address and describe the real request only via headers.
    - **gRPC mode** (`GRPC_LISTEN_ADDR`, opt-in — only starts if the env var is set) — implements `authv3.AuthorizationServer.Check`, reconstructing an `*http.Request` directly from `CheckRequest.Attributes.Request.Http` (structured fields, no header parsing needed), running it through the same handler via `httptest.NewRecorder()`, and translating the captured response into `OkResponse`/`DeniedResponse`.
-2. Both modes share one `TraefikOidcAuth` instance (one `src.New(...)` call in `main()`), so JWKS caching, OIDC discovery caching, and config are identical regardless of which transport a given gateway uses.
+2. Both modes share one `Gatepost` instance (one `src.New(...)` call in `main()`), so JWKS caching, OIDC discovery caching, and config are identical regardless of which transport a given gateway uses.
 3. `next` (what `ServeHTTP` calls on "allow") is a single stub that copies the request's headers (mutated in place by `attachHeaders`) onto the response — this is what tells the gateway which headers to inject into the real upstream call. Deny/redirect responses are already fully-formed by `ServeHTTP` (status, headers incl. `Location`/`Set-Cookie`, body) and pass through as-is.
 
 ### Why gRPC mode exists (not just HTTP mode)
@@ -36,11 +36,11 @@ The standard Gateway API filter (as opposed to Envoy Gateway's vendor-specific `
 
 **Good:**
 - Same core OIDC/session/authz logic now usable behind Traefik (native middleware or `forwardAuth`), Envoy Gateway (`SecurityPolicy`, gRPC mode), and any other ext_authz-HTTP-compatible gateway, without duplicating logic.
-- Sessions are fully stateless (encrypted into the cookie via `config.Secret`, see `src/session/cookieSessionStorage.go`), so `extauth-server` scales horizontally with no shared state — any replica can serve any request as long as they share the same `secret`.
+- Sessions are fully stateless (encrypted into the cookie via `config.Secret`, see `src/session/cookieSessionStorage.go`), so `gatepost-extauthz` scales horizontally with no shared state — any replica can serve any request as long as they share the same `secret`.
 - Panic in a single request (`recoveryInterceptor` in gRPC mode) does not take down the process — grpc-go's default behavior otherwise crashes the whole server on a handler panic, unlike `net/http`.
 
 **Bad / follow-ups:**
 - New dependency: `github.com/envoyproxy/go-control-plane/envoy` + `google.golang.org/grpc` (pinned ≥v1.82.1 — v1.78.0 had [GO-2026-4762](https://pkg.go.dev/vuln/GO-2026-4762), an authz bypass via missing leading slash in `:path`, directly relevant to an authz service). Pulls `vendor/` from 424K to ~19M. HTTP mode alone would not need this; accepted because gRPC mode is the only working fix for the Envoy Gateway redirect bug above.
-- Neither listener terminates TLS. Envoy's own docs call TLS "optional but recommended" for ext_authz backends; not implemented here. Acceptable only when the network path between gateway and `extauth-server` is already trusted (e.g. same-cluster ClusterIP, no cross-boundary hop). Flagged as a gap, not a decision — add `BackendTLSPolicy` support if this crosses a trust boundary in a real deployment.
-- HTTP mode's `forwardedRequest()` only honors `X-Forwarded-*` headers from peers matching `TRUSTED_PROXIES` (CIDR/IP allowlist, unset by default = never trusted). Added after initial implementation once it was clear the unconditional-trust version was the same vulnerability class as oauth2-proxy's [CVE-2026-40575](https://nvd.nist.gov/vuln/detail/CVE-2026-40575). See `docs/extauth-server.md` for details.
+- Neither listener terminates TLS. Envoy's own docs call TLS "optional but recommended" for ext_authz backends; not implemented here. Acceptable only when the network path between gateway and `gatepost-extauthz` is already trusted (e.g. same-cluster ClusterIP, no cross-boundary hop). Flagged as a gap, not a decision — add `BackendTLSPolicy` support if this crosses a trust boundary in a real deployment.
+- HTTP mode's `forwardedRequest()` only honors `X-Forwarded-*` headers from peers matching `TRUSTED_PROXIES` (CIDR/IP allowlist, unset by default = never trusted). Added after initial implementation once it was clear the unconditional-trust version was the same vulnerability class as oauth2-proxy's [CVE-2026-40575](https://nvd.nist.gov/vuln/detail/CVE-2026-40575). See `docs/gatepost-extauthz.md` for details.
 - HTTP mode still exists and still has value (Traefik `forwardAuth`, any future ext_authz-HTTP-compatible gateway that doesn't hit the header-stripping bug) — kept, not replaced by gRPC mode.

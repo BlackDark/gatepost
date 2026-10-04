@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
+	"github.com/BlackDark/gatepost/src/logging"
 )
 
 var httpFuncs = map[string]func(*requestConditionTree, ...string) error{

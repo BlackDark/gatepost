@@ -9,11 +9,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	src "github.com/BlackDark/test-oidc-traefik-plugin/src"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	src "github.com/BlackDark/gatepost/src"
+	"github.com/BlackDark/gatepost/src/config"
 )
 
-// multiConfig is the extauth-server YAML root. Breaking change vs single-client JSON.
+// multiConfig is the gatepost-extauthz YAML root. Breaking change vs single-client JSON.
 type multiConfig struct {
 	Clients []clientEntry
 }

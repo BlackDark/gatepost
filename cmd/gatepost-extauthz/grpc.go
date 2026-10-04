@@ -4,7 +4,7 @@
 // method/path/host/scheme as structured fields on CheckRequest, so no
 // X-Forwarded-* parsing is needed here - buildHTTPRequest reconstructs the
 // request directly. The response is captured via httptest.NewRecorder()
-// (TraefikOidcAuth.ServeHTTP writes straight to a http.ResponseWriter) and
+// (Gatepost.ServeHTTP writes straight to a http.ResponseWriter) and
 // translated into a CheckResponse. Because DeniedHttpResponse.Headers is the
 // full, explicit response Envoy sends to the client, this mode isn't subject
 // to the ext_authz HTTP mode allowed_client_headers gap that drops
@@ -84,7 +84,7 @@ func (s *grpcAuthServer) Check(ctx context.Context, req *authv3.CheckRequest) (*
 
 // buildHTTPRequest reconstructs the client's original request from the
 // structured CheckRequest attributes (method/path/host/scheme/headers/body),
-// matching what TraefikOidcAuth.ServeHTTP expects from a real *http.Request.
+// matching what Gatepost.ServeHTTP expects from a real *http.Request.
 func buildHTTPRequest(ctx context.Context, req *authv3.CheckRequest) (*http.Request, error) {
 	httpAttrs := req.GetAttributes().GetRequest().GetHttp()
 
@@ -150,14 +150,14 @@ func runGRPCServer(listenAddr string, next http.Handler) error {
 	return grpcServer.Serve(lis)
 }
 
-// recoveryInterceptor prevents a panic in TraefikOidcAuth.ServeHTTP (e.g. an
+// recoveryInterceptor prevents a panic in Gatepost.ServeHTTP (e.g. an
 // unexpected claim shape or malformed request) from crashing the whole
 // process, which is grpc-go's default behavior for handler panics (unlike
 // net/http, which only aborts the one connection).
 func recoveryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("extauth-server: panic in %s: %v\n%s\n", info.FullMethod, r, debug.Stack())
+			fmt.Printf("gatepost-extauthz: panic in %s: %v\n%s\n", info.FullMethod, r, debug.Stack())
 			err = errors.New("internal error")
 		}
 	}()

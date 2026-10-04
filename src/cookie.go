@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/session"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
 const (

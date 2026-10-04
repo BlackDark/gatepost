@@ -9,8 +9,8 @@ import (
 
 	"github.com/spyzhov/ajson"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
 )
 
 func isAuthorized(logger *logging.Logger, authorization *config.AuthorizationConfig, claims map[string]interface{}) bool {

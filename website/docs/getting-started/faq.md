@@ -28,7 +28,7 @@ If the IDP reports a `redirect_uri` mismatch and Traefik sits behind an ingress,
 The plugin builds the `redirect_uri` it sends to the IDP from the incoming request, and only honours `X-Forwarded-Proto` / `X-Forwarded-Host` when the request actually arrived from a proxy you listed. With an empty `trustedProxies` the forwarded headers are ignored, so behind an ingress the callback URL is built with the wrong host or scheme and the IDP refuses the callback.
 
 ```yml
-traefik-oidc-auth:
+gatepost:
   # highlight-start
   trustedProxies:
     - "10.42.0.0/16"   # the CIDR of the hop in front of Traefik

@@ -181,7 +181,7 @@ func TestCheck_AllowThroughRealAllowStub(t *testing.T) {
 		rw.WriteHeader(http.StatusOK)
 	})
 
-	// Simulates what TraefikOidcAuth.ServeHTTP does before calling next on
+	// Simulates what Gatepost.ServeHTTP does before calling next on
 	// an authorized public route: it mutates req.Header via attachHeaders,
 	// then invokes next.ServeHTTP(rw, req) with the same req.
 	wrapped := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {

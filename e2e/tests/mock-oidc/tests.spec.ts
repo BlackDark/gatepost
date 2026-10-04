@@ -8,7 +8,7 @@ const PLUGIN_SECRET = '0123456789abcdef0123456789abcdef';
 
 function baseMiddleware(extra = ''): string {
   return `
-        traefik-oidc-auth:
+        gatepost:
           logLevel: DEBUG
           secret: "${PLUGIN_SECRET}"
           provider:
@@ -38,7 +38,7 @@ ${extra}`;
  */
 function pkceMiddleware(): string {
   return `
-        traefik-oidc-auth:
+        gatepost:
           logLevel: DEBUG
           secret: "${PLUGIN_SECRET}"
           provider:

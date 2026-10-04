@@ -128,7 +128,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           logLevel: DEBUG
           secret: "${PLUGIN_SECRET}"
           provider:

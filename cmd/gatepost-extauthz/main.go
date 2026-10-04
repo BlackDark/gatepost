@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	src "github.com/BlackDark/test-oidc-traefik-plugin/src"
+	src "github.com/BlackDark/gatepost/src"
 )
 
 func main() {
@@ -19,11 +19,11 @@ func main() {
 
 	trustedProxies, err := parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "extauth-server: invalid TRUSTED_PROXIES: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gatepost-extauthz: invalid TRUSTED_PROXIES: %v\n", err)
 		os.Exit(1)
 	}
 	if len(trustedProxies) == 0 {
-		fmt.Println("extauth-server: WARNING: TRUSTED_PROXIES is unset - X-Forwarded-* headers will not be trusted from any source, all HTTP-mode requests will be treated as their own literal request (no path/method rewriting)")
+		fmt.Println("gatepost-extauthz: WARNING: TRUSTED_PROXIES is unset - X-Forwarded-* headers will not be trusted from any source, all HTTP-mode requests will be treated as their own literal request (no path/method rewriting)")
 	}
 
 	listenAddr := os.Getenv("LISTEN_ADDR")
@@ -46,7 +46,7 @@ func main() {
 	var reloadMu sync.Mutex
 
 	if err := reloadFromFile(ctx, router, configPath, allow, factory); err != nil {
-		fmt.Fprintf(os.Stderr, "extauth-server: config error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gatepost-extauthz: config error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -56,7 +56,7 @@ func main() {
 	// reload by doReload.
 	if startupCfg, err := parseMultiConfigFile(configPath); err == nil {
 		for _, c := range startupCfg.Clients {
-			fmt.Printf("extauth-server: client %q serving host(s) %v\n", c.ID, c.Hosts)
+			fmt.Printf("gatepost-extauthz: client %q serving host(s) %v\n", c.ID, c.Hosts)
 		}
 	}
 
@@ -69,9 +69,9 @@ func main() {
 	grpcAddr := os.Getenv("GRPC_LISTEN_ADDR")
 	if grpcAddr != "" {
 		go func() {
-			fmt.Printf("extauth-server (grpc) listening on %s\n", grpcAddr)
+			fmt.Printf("gatepost-extauthz (grpc) listening on %s\n", grpcAddr)
 			if err := runGRPCServer(grpcAddr, router); err != nil {
-				fmt.Fprintf(os.Stderr, "extauth-server: grpc: %v\n", err)
+				fmt.Fprintf(os.Stderr, "gatepost-extauthz: grpc: %v\n", err)
 				os.Exit(1)
 			}
 		}()
@@ -80,8 +80,8 @@ func main() {
 	// Log the routing table so an operator can confirm which Host maps to which
 	// client without guessing from a 403, and so a mis-keyed config is visible in
 	// the startup log rather than only at request time.
-	fmt.Println("extauth-server: multi-client Host routing — restrict ingress to the gateway (NetworkPolicy); set TRUSTED_PROXIES narrowly for HTTP mode")
-	fmt.Printf("extauth-server listening on %s\n", listenAddr)
+	fmt.Println("gatepost-extauthz: multi-client Host routing — restrict ingress to the gateway (NetworkPolicy); set TRUSTED_PROXIES narrowly for HTTP mode")
+	fmt.Printf("gatepost-extauthz listening on %s\n", listenAddr)
 	httpServer := &http.Server{
 		Addr:              listenAddr,
 		Handler:           forwardedRequest(trustedProxies, router),
@@ -91,7 +91,7 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	if err := httpServer.ListenAndServe(); err != nil {
-		fmt.Fprintf(os.Stderr, "extauth-server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gatepost-extauthz: %v\n", err)
 		os.Exit(1)
 	}
 }

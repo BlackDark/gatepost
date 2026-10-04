@@ -4,7 +4,7 @@ sidebar_position: 6
 
 # Bypass Authentication Rule
 
-When using the *traefik-oidc-auth* middleware, every request requires authentication by default.
+When using the *gatepost* middleware, every request requires authentication by default.
 But you might want to forward some public paths to the upstream directly or skip authentication if you're accessing your service from an internal network etc. This is where the `bypassAuthenticationRule` comes in.
 
 It lets you specify a rule, similar to traefik's `router`-rules. If a request matches this rule, it is forwarded to the upstream service without any authentication.
@@ -16,7 +16,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "${PROVIDER_URL}"
             clientId: "${CLIENT_ID}"

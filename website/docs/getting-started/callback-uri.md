@@ -44,7 +44,7 @@ If you are protecting many different subdomains that share parent domain (for ex
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
         # highlight-start
           callbackUri: "https://login.example.com/oidc/callback"
           sessionCookie:
@@ -71,7 +71,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           logLevel: DEBUG
           provider:
             url: "${PROVIDER_URL}"

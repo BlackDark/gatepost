@@ -4,7 +4,7 @@ import (
 	"net"
 	"text/template"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/errorPages"
+	"github.com/BlackDark/gatepost/src/errorPages"
 )
 
 const DefaultSecret = "MLFs4TT99kOOq8h3UAVRtYoCTDYXiRcZ"

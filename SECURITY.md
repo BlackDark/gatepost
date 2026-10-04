@@ -33,7 +33,7 @@ Thank you for taking the time to report a vulnerability.
 
 Report via **GitHub Security Advisory** on this repository:
 
-<https://github.com/BlackDark/test-oidc-traefik-plugin/security/advisories/new>
+<https://github.com/BlackDark/gatepost/security/advisories/new>
 
 This is the only channel that reaches this fork's maintainers, and it keeps the
 report and the eventual fix private until a release is published. Prefer it.
@@ -50,7 +50,7 @@ here.
 
 ### What to include
 
-- Affected component (`src/` Traefik middleware, or `cmd/extauth-server/`)
+- Affected component (`src/` Traefik middleware, or `cmd/gatepost-extauthz/`)
 - Affected version or git tag
 - Reproduction steps or a proof of concept
 - Impact (e.g. auth bypass, token disclosure, session fixation)
@@ -72,7 +72,7 @@ design rationale behind each hardening change is recorded in [`docs/adr/`](docs/
 
 ## Scope
 
-In scope: the Go code in this repository (`src/`, `cmd/extauth-server/`), its
+In scope: the Go code in this repository (`src/`, `cmd/gatepost-extauthz/`), its
 CI/CD workflows, and the shipped container images.
 
 Out of scope: vulnerabilities in the Go standard library, third-party

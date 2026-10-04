@@ -5,20 +5,20 @@ import { themes as prismThemes } from 'prism-react-renderer';
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
 const config: Config = {
-  title: 'Traefik OIDC Authentication',
-  tagline: 'Traefik OIDC Authentication Plugin',
+  title: 'Gatepost',
+  tagline: 'OIDC authentication for Traefik and ext_authz gateways',
   favicon: 'img/favicon.ico',
 
   // Set the production url of your site here
-  url: 'https://traefik-oidc-auth.sevensolutions.cc',
+  url: 'https://github.com/BlackDark/gatepost',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'sevensolutions', // Usually your GitHub org/user name.
-  projectName: 'traefik-oidc-auth', // Usually your repo name.
+  organizationName: 'BlackDark', // Usually your GitHub org/user name.
+  projectName: 'gatepost', // Usually your repo name.
   trailingSlash: false,
 
   onBrokenLinks: 'throw',
@@ -39,7 +39,7 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
-          editUrl: 'https://github.com/sevensolutions/traefik-oidc-auth/tree/main/website/',
+          editUrl: 'https://github.com/BlackDark/gatepost/tree/main/website/',
         },
         theme: {
           customCss: './src/css/custom.css',
@@ -62,9 +62,9 @@ const config: Config = {
     // Replace with your project's social card
     image: 'img/social-card.jpg',
     navbar: {
-      title: 'Traefik OIDC Authentication',
+      title: 'Gatepost',
       logo: {
-        alt: 'Traefik OIDC Authentication',
+        alt: 'Gatepost',
         src: 'img/logo.svg',
       },
       items: [
@@ -87,12 +87,12 @@ const config: Config = {
           label: 'Config Samples',
         },
         {
-          href: 'https://github.com/sevensolutions/traefik-oidc-auth/discussions/categories/q-a',
+          href: 'https://github.com/BlackDark/gatepost/discussions/categories/q-a',
           label: 'I have a Question',
           position: 'right',
         },
         {
-          href: 'https://github.com/sevensolutions/traefik-oidc-auth',
+          href: 'https://github.com/BlackDark/gatepost',
           label: 'GitHub',
           position: 'right',
         },
@@ -128,7 +128,7 @@ const config: Config = {
           items: [
             {
               label: 'Github Discussions',
-              href: 'https://github.com/sevensolutions/traefik-oidc-auth/discussions',
+              href: 'https://github.com/BlackDark/gatepost/discussions',
             },
           ],
         },
@@ -137,7 +137,7 @@ const config: Config = {
           items: [
             {
               label: 'GitHub',
-              href: 'https://github.com/sevensolutions/traefik-oidc-auth',
+              href: 'https://github.com/BlackDark/gatepost',
             },
             {
               label: 'Sponsor',

@@ -16,12 +16,12 @@ api:
 
 experimental:
   localPlugins:
-    traefik-oidc-auth:
-      moduleName: github.com/BlackDark/test-oidc-traefik-plugin
+    gatepost:
+      moduleName: github.com/BlackDark/gatepost
   # To test the released version
   #plugins:
-  #  traefik-oidc-auth:
-  #    moduleName: "github.com/BlackDark/test-oidc-traefik-plugin"
+  #  gatepost:
+  #    moduleName: "github.com/BlackDark/gatepost"
   #    version: v0.20.1
   
 providers:

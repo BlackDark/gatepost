@@ -22,7 +22,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://pocket-id.mydomain.com/"
             clientId: "<YourClientId>"
@@ -37,7 +37,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://pocket-id.mydomain.com/"
             clientId: "<YourClientId>"

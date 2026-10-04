@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/session"
 )
 
 func TestSessionIdpTokenExpiration(t *testing.T) {
@@ -21,7 +21,7 @@ func TestSessionIdpTokenExpiration(t *testing.T) {
 
 	logger := logging.CreateLogger(logging.LevelDebug)
 
-	toa := &TraefikOidcAuth{
+	toa := &Gatepost{
 		logger: logger,
 		Config: config,
 	}

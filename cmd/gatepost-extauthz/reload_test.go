@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	src "github.com/BlackDark/test-oidc-traefik-plugin/src"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	src "github.com/BlackDark/gatepost/src"
+	"github.com/BlackDark/gatepost/src/config"
 )
 
 func TestBuildHostMap_UsesFactoryPerClient(t *testing.T) {

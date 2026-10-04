@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	"github.com/BlackDark/gatepost/src/config"
 )
 
 func TestNormalizeHost(t *testing.T) {

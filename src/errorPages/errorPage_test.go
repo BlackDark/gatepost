@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
+	"github.com/BlackDark/gatepost/src/logging"
 )
 
 func testLogger() *logging.Logger {

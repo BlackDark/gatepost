@@ -9,17 +9,17 @@ sidebar_position: 3
 :::warning Config key casing — camelCase, on every surface
 Traefik decodes the plugin config with `mapstructure` and **no `TagName`**, so it matches the **Go struct field name case-insensitively and ignores the `json` and `yaml` struct tags entirely**. Traefik YAML must therefore use **camelCase**. Legacy PascalCase (`Secret`, `ClientId`) works for the same reason. A snake_case key is not a synonym — it decodes to the field's zero value, so the option looks configured and silently does nothing.
 
-`cmd/extauth-server`'s `CONFIG_FILE` is a **YAML multi-client** file (the single-client JSON form was removed), decoded with `gopkg.in/yaml.v3` against the `yaml` struct tags in `src/config/config.go`. Those tags are set to the **same lowerCamel Go field name** Traefik matches, so **one spelling serves both surfaces** — you can copy a key straight out of this reference into `CONFIG_FILE`. `src/config_dockeys_test.go` enforces that invariant over every field of every config struct, so the two surfaces cannot drift apart again.
+`cmd/gatepost-extauthz`'s `CONFIG_FILE` is a **YAML multi-client** file (the single-client JSON form was removed), decoded with `gopkg.in/yaml.v3` against the `yaml` struct tags in `src/config/config.go`. Those tags are set to the **same lowerCamel Go field name** Traefik matches, so **one spelling serves both surfaces** — you can copy a key straight out of this reference into `CONFIG_FILE`. `src/config_dockeys_test.go` enforces that invariant over every field of every config struct, so the two surfaces cannot drift apart again.
 
 There is deliberately **no second column any more**: the snake_case `json` tags (`log_level`, `callback_uri`, `provider.client_id`, …) are not valid keys on either surface. Do not use them.
 
 Every `bool` provider option is declared in Go as a `string` field plus a separate `bool` field with a `Bool` suffix (`src/config/config.go`). The string field exists to serve Traefik's weakly-typed `mapstructure` decoder and `${VAR}` expansion; `src.New` expands it into the `bool` field with `ExpandEnvironmentVariableBoolean`, which accepts `true`/`false`/`1`/`0`. That covers `revokeTokensOnLogout`, `usePkce`, `insecureSkipVerify`, `validateAudience`, `validateIssuer`, `validateNonce` and `useClaimsFromUserInfo`.
 
-Write the plain camelCase name with a **string** value on the Traefik path (`revokeTokensOnLogout: "true"`), as every example in this reference does. In `CONFIG_FILE` you may additionally use a native YAML boolean. The `Bool`-suffixed keys are deliberately **not** listed as options here — they exist for the `CONFIG_FILE` YAML surface, not for Traefik; see [`docs/extauth-server.md`](https://github.com/BlackDark/test-oidc-traefik-plugin/blob/main/docs/extauth-server.md#multi-client-config).
+Write the plain camelCase name with a **string** value on the Traefik path (`revokeTokensOnLogout: "true"`), as every example in this reference does. In `CONFIG_FILE` you may additionally use a native YAML boolean. The `Bool`-suffixed keys are deliberately **not** listed as options here — they exist for the `CONFIG_FILE` YAML surface, not for Traefik; see [`docs/gatepost-extauthz.md`](https://github.com/BlackDark/gatepost/blob/main/docs/gatepost-extauthz.md#multi-client-config).
 
 Three guardrails **do** fail loudly with the correct camelCase spelling, and are your safety net that a misspelled key was caught rather than silently dropped: `provider.tokenValidation` and `sessionStorageType` are rejected at startup when invalid, and `provider.maxAuthAgeSeconds` / `maxSessionLifetimeSeconds` / `sessionIdleTimeoutSeconds` are rejected when negative. A wrong **spelling**, by contrast, is never rejected — see the note below on snake_case.
 
-- **`trustedProxies` is a different mechanism on `extauth-server`, not a spelling.** `cmd/extauth-server` gates the `X-Forwarded-*` rewrite on the `TRUSTED_PROXIES` environment variable (`parseTrustedProxies(os.Getenv(...))`, checked against the TCP peer in `forwardedRequest`). The `trustedProxies` key in `CONFIG_FILE` decodes into `config.TrustedProxies` and is **never read on that path**. Put the allowlist in the environment, not the file. See [`docs/extauth-server.md`](https://github.com/BlackDark/test-oidc-traefik-plugin/blob/main/docs/extauth-server.md#trusted_proxies-http-mode-only).
+- **`trustedProxies` is a different mechanism on `gatepost-extauthz`, not a spelling.** `cmd/gatepost-extauthz` gates the `X-Forwarded-*` rewrite on the `TRUSTED_PROXIES` environment variable (`parseTrustedProxies(os.Getenv(...))`, checked against the TCP peer in `forwardedRequest`). The `trustedProxies` key in `CONFIG_FILE` decodes into `config.TrustedProxies` and is **never read on that path**. Put the allowlist in the environment, not the file. See [`docs/gatepost-extauthz.md`](https://github.com/BlackDark/gatepost/blob/main/docs/gatepost-extauthz.md#trusted_proxies-http-mode-only).
 
 A YAML `null` on a sub-struct (`sessionCookie:`, `authorization:`, `errorPages:`, `errorPages.unauthenticated:`/`errorPages.unauthorized:`, `authorizationHeader:`, `authorizationCookie:`, `provider:`) is **rejected** with an error naming the field rather than defaulted, so a hot reload fails closed and keeps the previous config. Omit the key to get its defaults.
 
@@ -94,7 +94,7 @@ provider:
 | `frontChannelLogoutUri`* | no | `string` | `/frontchannel-logout` | Endpoint for [OIDC Front-Channel Logout](https://openid.net/specs/openid-connect-frontchannel-1_0.html). Requires a matching `iss` query parameter **and** either a matching `sid` or a matching `id_token_hint` before clearing the session. See [Front-Channel Logout](#front-channel-logout). |
 | `postLogoutRedirectUri`* | no | `string` | `/` | The url where the user should be redirected after logout. |
 | `validPostLogoutRedirectUris` | no | `string[]` | *none* | Allowed redirect URIs for the logout endpoint's *redirect_uri* query parameter. Entries match exactly unless wildcard support is explicitly enabled. See [Redirect URI Wildcards](#redirect-uri-wildcards). |
-| `cookieNamePrefix`* | no | `string` | `TraefikOidcAuth` | Specifies the prefix for all cookies used internally by the plugin. The final names are concatenated using dot-notation. Eg. `TraefikOidcAuth.Session`, `TraefikOidcAuth.CodeVerifier` etc. Please note that this prefix does not apply to *AuthorizationCookie* where the name can be set individually. |
+| `cookieNamePrefix`* | no | `string` | `Gatepost` | Specifies the prefix for all cookies used internally by the plugin. The final names are concatenated using dot-notation. Eg. `Gatepost.Session`, `Gatepost.CodeVerifier` etc. Please note that this prefix does not apply to *AuthorizationCookie* where the name can be set individually. |
 | `sessionCookie` | no | [`sessionCookie`](#session-cookie) | *none* | SessionCookie Configuration. See *SessionCookieConfig* block. |
 | `authorizationHeader` | no | [`authorizationHeader`](#authorization-header) | *none* | AuthorizationHeader Configuration. See *AuthorizationHeader* block. |
 | `authorizationCookie` | no | [`authorizationCookie`](#authorization-cookie) | *none* | AuthorizationCookie Configuration. See *AuthorizationCookie* block. |
@@ -141,7 +141,7 @@ Both bounds only apply to sessions in the session cookie. A request authenticate
 :::
 
 ```yml
-traefik-oidc-auth:
+gatepost:
   secret: "MLFs4TT99kOOq8h3UAVRtYoCTDYXiRcZ"
   # highlight-start
   maxSessionLifetimeSeconds: 3600   # re-authenticate at least once an hour
@@ -165,7 +165,7 @@ The plugin builds absolute URLs — most importantly the `redirect_uri` it sends
 If Traefik sits behind an ingress, load balancer or CDN, you **MUST** list that hop's CIDR. Otherwise the `redirect_uri` is built from the wrong host or scheme, and the IDP rejects the callback.
 
 ```yml
-traefik-oidc-auth:
+gatepost:
   provider:
     url: "https://idp.example.com"
     clientId: "<YourClientId>"
@@ -199,7 +199,7 @@ An `X-Forwarded-Proto` value that is not one of `http`, `https`, `ws`, `wss` is 
 `authorizationParams` are pinned to your configured values. Listing a key in `authorizationParamsOverridable` additionally lets an incoming request replace it with a query parameter of the same name.
 
 ```yml
-traefik-oidc-auth:
+gatepost:
   # highlight-start
   authorizationParams:
     acr_values: "aal2"
@@ -245,14 +245,14 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://idp.example.com"
             clientId: "<DefaultClientId>"
     oidc-auth-sensitive: # highlight-start
       plugin:
-        traefik-oidc-auth:
-          cookieNamePrefix: "TraefikOidcAuthSensitive"
+        gatepost:
+          cookieNamePrefix: "GatepostSensitive"
           provider:
             url: "https://idp.example.com"
             clientId: "<SensitiveClientId>"
@@ -312,7 +312,7 @@ With wildcards enabled:
 | `tokenValidation`* | no | `string` | `IdToken` | Specifies which token or method should be used to validate the authentication cookie. Can be either `AccessToken`, `IdToken` or `Introspection`. Any other value is rejected at startup rather than failing every login. `Introspection` may not work when using PKCE. |
 | `useClaimsFromUserInfo`* | no | `bool` | `false` | When enabled, an additional request to the provider's `userinfo_endpoint` is made to validate the token and to retrieve additional claims. The userinfo claims are merged directly into the token claims, with userinfo values overriding token values for non-security-critical claims. |
 | `tokenRenewalThreshold` | no | `float` | `0.75` | The percentage of the token's lifetime after which it should be renewed before expiration. The value must be between 0.5 and 1.0. |
-| `revokeTokensOnLogout`* | no | `bool` | `true` | On user-initiated logout — and on a front-channel logout notification for the same session — POST the refresh token to the IDP's `revocation_endpoint` so neither the cookie nor the refresh token can be replayed afterwards. **Silently skipped when the IDP's discovery document advertises no `revocation_endpoint`, or when the session holds no refresh token** — check your provider before relying on it. A failing revocation endpoint is logged at `WARN` and the logout completes anyway. It only revokes *that* session's refresh token; other browsers holding a copy of the same cookie keep working. See [Security Considerations](./security-considerations.md). In `CONFIG_FILE` the same option also has a native-boolean spelling; see [`docs/extauth-server.md`](https://github.com/BlackDark/test-oidc-traefik-plugin/blob/main/docs/extauth-server.md#multi-client-config). |
+| `revokeTokensOnLogout`* | no | `bool` | `true` | On user-initiated logout — and on a front-channel logout notification for the same session — POST the refresh token to the IDP's `revocation_endpoint` so neither the cookie nor the refresh token can be replayed afterwards. **Silently skipped when the IDP's discovery document advertises no `revocation_endpoint`, or when the session holds no refresh token** — check your provider before relying on it. A failing revocation endpoint is logged at `WARN` and the logout completes anyway. It only revokes *that* session's refresh token; other browsers holding a copy of the same cookie keep working. See [Security Considerations](./security-considerations.md). In `CONFIG_FILE` the same option also has a native-boolean spelling; see [`docs/gatepost-extauthz.md`](https://github.com/BlackDark/gatepost/blob/main/docs/gatepost-extauthz.md#multi-client-config). |
 | `maxAuthAgeSeconds` | no | `int` | `0` (disabled) | Enforces the step-up freshness requirement **only on a challenge** (`unauthorizedBehavior: Challenge` with an already-valid session): sends `max_age` on the authorization request and requires the resulting ID token to carry an `auth_time` claim that recent. A **plain login is unaffected**, as are session renewals. Not usable with `tokenValidation: Introspection`. See [Step-Up Authentication](#step-up-authentication). |
 | `oidcTimeoutSeconds` | no | `int` | `30` | Bounds **every** outbound call to the IDP — discovery, token, JWKS, introspection and userinfo. Without a client-side timeout a hung IDP pins the request goroutine indefinitely, and because discovery and JWKS loads happen under a lock one slow dependency stalls every router behind that Traefik instance. A value below `0` is reset to the default of `30`; `0` is also treated as the default. |
 | `validateNonce` | no | `bool` | `true` | Require the ID token's `nonce` claim to match the value sealed into the login state (OIDC Core). Set to `false` **only** if your IDP cannot return a nonce; doing so removes the replay protection that binds the ID token to the authorization request that started it. |
@@ -326,7 +326,7 @@ Setting [`unauthorizedBehavior`](#plugin-config-block) to `Challenge` only makes
 `maxAuthAgeSeconds` fixes that, but **only for the challenge**. When the request reached the middleware with a valid session and failed the `authorization` rules (`unauthorizedBehavior: Challenge`), the freshness requirement is enforced: `max_age` is sent on the authorization request and the resulting ID token must carry an `auth_time` claim within that many seconds. `0` (the default) disables the check. A **plain login** — an unauthenticated request answered by `unauthenticatedBehavior: Challenge` or `Auto` — is **unaffected**, as is every renewal of an existing session: neither sends `max_age` nor is checked for freshness.
 
 ```yml
-traefik-oidc-auth:
+gatepost:
   provider:
     url: "https://idp.example.com"
     clientId: "<YourClientId>"

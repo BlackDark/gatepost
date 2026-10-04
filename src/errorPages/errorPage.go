@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
 type ProblemDetails struct {
@@ -177,7 +177,7 @@ func renderPage(logger *logging.Logger, page *ErrorPageConfig, evalContext map[s
     </div>
 
     <div class="footer">
-      <a href="https://traefik-oidc-auth.sevensolutions.cc/" target="_blank">Powered by traefik-oidc-auth</a>
+      <a href="https://github.com/BlackDark/gatepost" target="_blank">Powered by gatepost</a>
     </div>
   </div>
 </body>

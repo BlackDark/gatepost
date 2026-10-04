@@ -12,7 +12,7 @@ type TraefikRouter = { name?: string; provider?: string };
 type TraefikMiddleware = {
   name?: string;
   provider?: string;
-  plugin?: { 'traefik-oidc-auth'?: { CookieNamePrefix?: string } };
+  plugin?: { gatepost?: { CookieNamePrefix?: string } };
 };
 
 function routerNamesFromYaml(yaml: string): string[] {
@@ -44,8 +44,8 @@ async function fileOidcPrefixes(): Promise<string[] | null> {
   const middlewares = await fetchJson<TraefikMiddleware[]>(MIDDLEWARES_API);
   if (!Array.isArray(middlewares)) return null;
   return middlewares
-    .filter((m) => m.provider === 'file' && m.plugin?.['traefik-oidc-auth'])
-    .map((m) => m.plugin?.['traefik-oidc-auth']?.CookieNamePrefix ?? '');
+    .filter((m) => m.provider === 'file' && m.plugin?.['gatepost'])
+    .map((m) => m.plugin?.['gatepost']?.CookieNamePrefix ?? '');
 }
 
 export async function configureTraefik(
@@ -77,9 +77,12 @@ export async function configureTraefik(
 ) {
   const filePath = path.join(__dirname, opts?.file ?? '.http.yml');
   const marker = `e2e${Date.now()}`;
+  // Anchored to a line start: `gatepost:` is short enough to appear inside an
+  // image ref, URL, or comment, and a bare global replace would stamp a bogus
+  // CookieNamePrefix into whatever it happened to match first.
   const stamped = yaml.replace(
-    /traefik-oidc-auth:/g,
-    `traefik-oidc-auth:\n          CookieNamePrefix: "${marker}"`,
+    /^(\s*)gatepost:/gm,
+    (_match, indent: string) => `${indent}gatepost:\n${indent}  CookieNamePrefix: "${marker}"`,
   );
   const expectedRouters = routerNamesFromYaml(stamped).sort();
   fs.writeFileSync(filePath, stamped);

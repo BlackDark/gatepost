@@ -19,9 +19,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/oidc"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/oidc"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
 const (
@@ -40,7 +40,7 @@ const (
 )
 
 // oidcTimeout returns the per-call deadline for outbound IDP requests.
-func (toa *TraefikOidcAuth) oidcTimeout() time.Duration {
+func (toa *Gatepost) oidcTimeout() time.Duration {
 	if toa.Config == nil || toa.Config.Provider == nil || toa.Config.Provider.OidcTimeoutSeconds <= 0 {
 		return defaultOidcTimeout
 	}
@@ -50,7 +50,7 @@ func (toa *TraefikOidcAuth) oidcTimeout() time.Duration {
 
 // oidcContext derives a bounded context for IDP calls that have no request
 // context of their own (session refresh, background introspection).
-func (toa *TraefikOidcAuth) oidcContext() (context.Context, context.CancelFunc) {
+func (toa *Gatepost) oidcContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), toa.oidcTimeout())
 }
 
@@ -63,7 +63,7 @@ var secretValuePattern = regexp.MustCompile(`(?i)("?(?:client_secret|client_asse
 // capIdcErrorBody truncates and scrubs an IDP error body so it can be logged
 // safely. Providers routinely echo the request parameters back in the error,
 // which would put the client secret into the log file.
-func capIdcErrorBody(toa *TraefikOidcAuth, body []byte) string {
+func capIdcErrorBody(toa *Gatepost, body []byte) string {
 	if toa != nil && toa.Config != nil && toa.Config.Provider != nil {
 		body = []byte(scrubSecret(body, toa.Config.Provider.ClientSecret))
 		body = []byte(scrubSecret(body, toa.Config.Provider.ClientId))
@@ -89,7 +89,7 @@ func scrubSecret(body []byte, secret string) string {
 
 // logIdcErrorBody logs a truncated, scrubbed IDP error body at WARN. The body is
 // attacker-influenced and may contain credentials, so it never goes to INFO.
-func logIdcErrorBody(toa *TraefikOidcAuth, operation string, resp *http.Response) {
+func logIdcErrorBody(toa *Gatepost, operation string, resp *http.Response) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxOidcResponseBody))
 	toa.logger.Log(logging.LevelWarn, "%s: Provider returned status %d: %s", operation, resp.StatusCode, capIdcErrorBody(toa, body))
 }
@@ -152,14 +152,14 @@ func randomBytesInHex(count int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func exchangeAuthCode(oidcAuth *TraefikOidcAuth, req *http.Request, authCode string, codeVerifierEnc string) (*oidc.OidcTokenResponse, error) {
+func exchangeAuthCode(oidcAuth *Gatepost, req *http.Request, authCode string, codeVerifierEnc string) (*oidc.OidcTokenResponse, error) {
 	ctx, cancel := oidcAuth.oidcContext()
 	defer cancel()
 
 	return exchangeAuthCodeContext(ctx, oidcAuth, req, authCode, codeVerifierEnc)
 }
 
-func exchangeAuthCodeContext(ctx context.Context, oidcAuth *TraefikOidcAuth, req *http.Request, authCode string, codeVerifierEnc string) (*oidc.OidcTokenResponse, error) {
+func exchangeAuthCodeContext(ctx context.Context, oidcAuth *Gatepost, req *http.Request, authCode string, codeVerifierEnc string) (*oidc.OidcTokenResponse, error) {
 	redirectUrl := oidcAuth.GetAbsoluteCallbackURL(req).String()
 
 	urlValues := url.Values{
@@ -201,14 +201,14 @@ func exchangeAuthCodeContext(ctx context.Context, oidcAuth *TraefikOidcAuth, req
 }
 
 // renewToken exchanges a refresh token for a new access token.
-func (toa *TraefikOidcAuth) renewToken(refreshToken string) (*oidc.OidcTokenResponse, error) {
+func (toa *Gatepost) renewToken(refreshToken string) (*oidc.OidcTokenResponse, error) {
 	ctx, cancel := toa.oidcContext()
 	defer cancel()
 
 	return toa.renewTokenContext(ctx, refreshToken)
 }
 
-func (toa *TraefikOidcAuth) renewTokenContext(ctx context.Context, refreshToken string) (*oidc.OidcTokenResponse, error) {
+func (toa *Gatepost) renewTokenContext(ctx context.Context, refreshToken string) (*oidc.OidcTokenResponse, error) {
 	urlValues := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {toa.Config.Provider.ClientId},
@@ -236,7 +236,7 @@ func (toa *TraefikOidcAuth) renewTokenContext(ctx context.Context, refreshToken 
 
 // postFormToTokenEndpoint performs the shared form-POST to the token endpoint used
 // by both the authorization_code and refresh_token grants.
-func (toa *TraefikOidcAuth) postFormToTokenEndpoint(ctx context.Context, operation string, urlValues url.Values) (*oidc.OidcTokenResponse, error) {
+func (toa *Gatepost) postFormToTokenEndpoint(ctx context.Context, operation string, urlValues url.Values) (*oidc.OidcTokenResponse, error) {
 	if toa.DiscoveryDocument == nil || toa.DiscoveryDocument.TokenEndpoint == "" {
 		return nil, errors.New("token_endpoint is not set")
 	}
@@ -284,7 +284,7 @@ func (toa *TraefikOidcAuth) postFormToTokenEndpoint(ctx context.Context, operati
 // on a non-expiry failure (unknown kid after a key rotation). Centralised so both
 // local parsers - id/access token and the signed userinfo response - share the retry
 // and cannot drift apart.
-func (toa *TraefikOidcAuth) parseJwtWithJwksRetry(ctx context.Context, tokenString string, options []jwt.ParserOption, operation string) (jwt.MapClaims, error) {
+func (toa *Gatepost) parseJwtWithJwksRetry(ctx context.Context, tokenString string, options []jwt.ParserOption, operation string) (jwt.MapClaims, error) {
 	// Bounded: a hanging JWKS endpoint must not pin the request that needs the key.
 	if err := toa.Jwks.EnsureLoadedContext(ctx, toa.logger, toa.httpClient, false); err != nil {
 		return nil, err
@@ -324,14 +324,14 @@ func (toa *TraefikOidcAuth) parseJwtWithJwksRetry(ctx context.Context, tokenStri
 	return claims, nil
 }
 
-func (toa *TraefikOidcAuth) validateTokenLocally(tokenString string, expectedNonce string) (bool, map[string]interface{}, error) {
+func (toa *Gatepost) validateTokenLocally(tokenString string, expectedNonce string) (bool, map[string]interface{}, error) {
 	ctx, cancel := toa.oidcContext()
 	defer cancel()
 
 	return toa.validateTokenLocallyContext(ctx, tokenString, expectedNonce)
 }
 
-func (toa *TraefikOidcAuth) validateTokenLocallyContext(ctx context.Context, tokenString string, expectedNonce string) (bool, map[string]interface{}, error) {
+func (toa *Gatepost) validateTokenLocallyContext(ctx context.Context, tokenString string, expectedNonce string) (bool, map[string]interface{}, error) {
 	leeway := time.Duration(toa.Config.Provider.TokenClockSkewSeconds) * time.Second
 
 	options := []jwt.ParserOption{
@@ -380,7 +380,7 @@ func isTokenExpiredError(err error) bool {
 	return strings.Contains(err.Error(), jwt.ErrTokenExpired.Error())
 }
 
-func (toa *TraefikOidcAuth) introspectToken(token string) (bool, map[string]interface{}, error) {
+func (toa *Gatepost) introspectToken(token string) (bool, map[string]interface{}, error) {
 	ctx, cancel := toa.oidcContext()
 	defer cancel()
 
@@ -394,7 +394,7 @@ func (toa *TraefikOidcAuth) introspectToken(token string) (bool, map[string]inte
 // undecodable body, missing/non-boolean "active") returns false AND a non-nil
 // error. Never treat a nil error with a false bool as "active", and never ignore
 // the error and use the claims.
-func (toa *TraefikOidcAuth) introspectTokenContext(ctx context.Context, token string) (bool, map[string]interface{}, error) {
+func (toa *Gatepost) introspectTokenContext(ctx context.Context, token string) (bool, map[string]interface{}, error) {
 	if toa.DiscoveryDocument == nil || toa.DiscoveryDocument.IntrospectionEndpoint == "" {
 		return false, nil, errors.New("introspection_endpoint is not set")
 	}
@@ -474,7 +474,7 @@ func (toa *TraefikOidcAuth) introspectTokenContext(ctx context.Context, token st
 // non-fatal - log it at WARN and complete the logout anyway - because a
 // misbehaving revocation endpoint must not strand a user in a session they asked
 // to end.
-func (toa *TraefikOidcAuth) revokeToken(ctx context.Context, refreshToken string) error {
+func (toa *Gatepost) revokeToken(ctx context.Context, refreshToken string) error {
 	if toa.Config == nil || toa.Config.Provider == nil || !toa.Config.Provider.RevokeTokensOnLogoutBool {
 		return nil
 	}
@@ -540,7 +540,7 @@ func (toa *TraefikOidcAuth) revokeToken(ctx context.Context, refreshToken string
 	return nil
 }
 
-func (toa *TraefikOidcAuth) getClientAssertionJwtToken() (string, error) {
+func (toa *Gatepost) getClientAssertionJwtToken() (string, error) {
 	claims := jwt.MapClaims{
 		"iss": toa.Config.Provider.ClientId,
 		"sub": toa.Config.Provider.ClientId,
@@ -560,14 +560,14 @@ func (toa *TraefikOidcAuth) getClientAssertionJwtToken() (string, error) {
 	return clientAssertionJwt, nil
 }
 
-func (toa *TraefikOidcAuth) getUserInfo(accessToken string, idTokenSubject string) (map[string]interface{}, error) {
+func (toa *Gatepost) getUserInfo(accessToken string, idTokenSubject string) (map[string]interface{}, error) {
 	ctx, cancel := toa.oidcContext()
 	defer cancel()
 
 	return toa.getUserInfoContext(ctx, accessToken, idTokenSubject)
 }
 
-func (toa *TraefikOidcAuth) getUserInfoContext(ctx context.Context, accessToken string, idTokenSubject string) (map[string]interface{}, error) {
+func (toa *Gatepost) getUserInfoContext(ctx context.Context, accessToken string, idTokenSubject string) (map[string]interface{}, error) {
 	if toa.DiscoveryDocument == nil || toa.DiscoveryDocument.UserinfoEndpoint == "" {
 		return nil, errors.New("userinfo_endpoint is not set")
 	}
@@ -655,7 +655,7 @@ func (toa *TraefikOidcAuth) getUserInfoContext(ctx context.Context, accessToken 
 // advertised as requiring fresh authentication cannot be satisfied by an
 // authentication from hours ago. Returns nil when there is nothing to add, so the
 // caller can range over the result unconditionally.
-func (toa *TraefikOidcAuth) authParamsForChallenge(isChallenge bool) map[string]string {
+func (toa *Gatepost) authParamsForChallenge(isChallenge bool) map[string]string {
 	if !isChallenge || toa.Config == nil || toa.Config.Provider == nil {
 		return nil
 	}
@@ -674,7 +674,7 @@ func (toa *TraefikOidcAuth) authParamsForChallenge(isChallenge bool) map[string]
 //
 // A missing auth_time while the feature is enabled is treated as NOT fresh: an IDP
 // that silently omits the claim must not be able to bypass step-up.
-func (toa *TraefikOidcAuth) authTimeIsFresh(claims map[string]any, now time.Time) bool {
+func (toa *Gatepost) authTimeIsFresh(claims map[string]any, now time.Time) bool {
 	if toa.Config == nil || toa.Config.Provider == nil || toa.Config.Provider.MaxAuthAgeSeconds <= 0 {
 		return true
 	}

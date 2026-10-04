@@ -19,14 +19,14 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/errorPages"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/rules"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/errorPages"
+	"github.com/BlackDark/gatepost/src/rules"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/oidc"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/session"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/utils"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/oidc"
+	"github.com/BlackDark/gatepost/src/session"
+	"github.com/BlackDark/gatepost/src/utils"
 )
 
 // clientIdentityHeaders are the well-known headers a backend or a sibling
@@ -54,7 +54,7 @@ var clientIdentityHeaders = []string{
 	"X-Forwarded-Access-Token",
 }
 
-type TraefikOidcAuth struct {
+type Gatepost struct {
 	logger                      *logging.Logger
 	next                        http.Handler
 	httpClient                  *http.Client
@@ -89,7 +89,7 @@ type TraefikOidcAuth struct {
 //
 // A failed attempt is not cached, so a temporarily unreachable IdP recovers on
 // the next request.
-func (toa *TraefikOidcAuth) EnsureOidcDiscovery() error {
+func (toa *Gatepost) EnsureOidcDiscovery() error {
 	// Fast path under the read lock: unsynchronised reads of DiscoveryDocument
 	// are a data race against the initialisation below.
 	toa.Lock.RLock()
@@ -153,7 +153,7 @@ func (toa *TraefikOidcAuth) EnsureOidcDiscovery() error {
 // validIssuerOrConfig returns the effective issuer: the middleware-owned copy
 // when discovery initialised, else the configured value (which is what a
 // hand-constructed middleware - tests, the Traefik catalog hack - carries).
-func (toa *TraefikOidcAuth) effectiveValidIssuer() string {
+func (toa *Gatepost) effectiveValidIssuer() string {
 	toa.Lock.RLock()
 	value := toa.validIssuer
 	toa.Lock.RUnlock()
@@ -173,7 +173,7 @@ func (toa *TraefikOidcAuth) effectiveValidIssuer() string {
 // is attacker-controlled, so it is only read from a peer listed in
 // trusted_proxies, and only when it names a scheme we are willing to build a URL
 // from.
-func (toa *TraefikOidcAuth) requestScheme(req *http.Request) string {
+func (toa *Gatepost) requestScheme(req *http.Request) string {
 	if toa.requestFromTrustedProxy(req) {
 		if proto := lastForwardedValue(req.Header.Get("X-Forwarded-Proto")); proto != "" {
 			if validForwardedProto(proto) {
@@ -193,7 +193,7 @@ func (toa *TraefikOidcAuth) requestScheme(req *http.Request) string {
 
 // requestHost resolves the host to use for absolute URLs, under the same
 // trusted-proxy gating as requestScheme.
-func (toa *TraefikOidcAuth) requestHost(req *http.Request) string {
+func (toa *Gatepost) requestHost(req *http.Request) string {
 	if toa.requestFromTrustedProxy(req) {
 		// An empty (or whitespace-only) rightmost entry is not a usable value, and
 		// falling back to a client-supplied leftmost entry is exactly the hole this
@@ -206,13 +206,13 @@ func (toa *TraefikOidcAuth) requestHost(req *http.Request) string {
 	return req.Host
 }
 
-func (toa *TraefikOidcAuth) fullHost(req *http.Request) string {
+func (toa *Gatepost) fullHost(req *http.Request) string {
 	return toa.requestScheme(req) + "://" + toa.requestHost(req)
 }
 
 // ensureAbsoluteUrl is the trusted-proxy aware replacement for
 // utils.EnsureAbsoluteUrl.
-func (toa *TraefikOidcAuth) ensureAbsoluteUrl(req *http.Request, rawUrl string) string {
+func (toa *Gatepost) ensureAbsoluteUrl(req *http.Request, rawUrl string) string {
 	if strings.HasPrefix(rawUrl, "http://") || strings.HasPrefix(rawUrl, "https://") {
 		return rawUrl
 	}
@@ -226,8 +226,8 @@ func (toa *TraefikOidcAuth) ensureAbsoluteUrl(req *http.Request, rawUrl string) 
 
 // requestFromTrustedProxy reports whether the request arrived from a proxy the
 // operator declared in trusted_proxies. An empty list trusts nothing, which is
-// the same fail-closed default cmd/extauth-server uses.
-func (toa *TraefikOidcAuth) requestFromTrustedProxy(req *http.Request) bool {
+// the same fail-closed default cmd/gatepost-extauthz uses.
+func (toa *Gatepost) requestFromTrustedProxy(req *http.Request) bool {
 	if toa.Config == nil || len(toa.Config.TrustedProxyNets) == 0 {
 		return false
 	}
@@ -302,7 +302,7 @@ func lastForwardedValue(value string) string {
 	return value
 }
 
-func (toa *TraefikOidcAuth) GetAbsoluteCallbackURL(req *http.Request) *url.URL {
+func (toa *Gatepost) GetAbsoluteCallbackURL(req *http.Request) *url.URL {
 	if utils.UrlIsAbsolute(toa.CallbackURL) {
 		return toa.CallbackURL
 	}
@@ -313,7 +313,7 @@ func (toa *TraefikOidcAuth) GetAbsoluteCallbackURL(req *http.Request) *url.URL {
 	return &abs
 }
 
-func (toa *TraefikOidcAuth) isCallbackRequest(req *http.Request) bool {
+func (toa *Gatepost) isCallbackRequest(req *http.Request) bool {
 	// Compare against the decoded path, like every other route match below, and
 	// never mutate req.URL.
 	if !pathMatchesRoute(req.URL.Path, toa.CallbackURL.Path) {
@@ -357,11 +357,11 @@ func pathMatchesRoute(requestPath, route string) bool {
 // pathMatchesConfiguredRoute matches the request's decoded path against a
 // configured route. The raw RequestURI (query string and percent-encoding
 // included) is deliberately not used.
-func (toa *TraefikOidcAuth) pathMatchesConfiguredRoute(req *http.Request, route string) bool {
+func (toa *Gatepost) pathMatchesConfiguredRoute(req *http.Request, route string) bool {
 	return pathMatchesRoute(req.URL.Path, route)
 }
 
-func (toa *TraefikOidcAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+func (toa *Gatepost) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	isPublic := false
 	if toa.BypassAuthenticationRule != nil {
 		if toa.BypassAuthenticationRule.Match(toa.logger, req) {
@@ -479,7 +479,7 @@ func (toa *TraefikOidcAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 // hasSessionMaterial reports whether the request carries anything that would
 // have to be validated before it can be forwarded: a session cookie (including
 // its chunks) or a configured external Authorization header/cookie.
-func (toa *TraefikOidcAuth) hasSessionMaterial(req *http.Request) bool {
+func (toa *Gatepost) hasSessionMaterial(req *http.Request) bool {
 	if ticket, err := readChunkedCookie(req, getSessionCookieName(toa.Config)); err == nil && ticket != "" {
 		return true
 	}
@@ -514,13 +514,13 @@ func (toa *TraefikOidcAuth) hasSessionMaterial(req *http.Request) bool {
 //
 // Header attachment for authenticated requests happens in ServeHTTP, where a
 // real session and claims exist.
-func (toa *TraefikOidcAuth) forwardToUpstream(rw http.ResponseWriter, req *http.Request) {
+func (toa *Gatepost) forwardToUpstream(rw http.ResponseWriter, req *http.Request) {
 	toa.sanitizeForUpstream(req)
 
 	toa.next.ServeHTTP(rw, req)
 }
 
-func (toa *TraefikOidcAuth) sanitizeForUpstream(req *http.Request) {
+func (toa *Gatepost) sanitizeForUpstream(req *http.Request) {
 	// Remove all internal cookies from the request before forwarding
 	keepCookies := make([]*http.Cookie, 0)
 
@@ -592,7 +592,7 @@ func (t *sessionWriteTracker) mark(sessionId string) {
 // bound, capped at 60s. That keeps the durable timestamp at most that much older
 // than reality, so a session can outlive the idle bound by at most one refresh
 // interval instead of indefinitely.
-func (toa *TraefikOidcAuth) sessionIdleRefreshDue(sessionId string) bool {
+func (toa *Gatepost) sessionIdleRefreshDue(sessionId string) bool {
 	// AuthorizationHeader / AuthorizationCookie are per-request pseudo-sessions
 	// with no cookie of their own; re-storing them would mint a session cookie
 	// out of a header value.
@@ -632,7 +632,7 @@ func (toa *TraefikOidcAuth) sessionIdleRefreshDue(sessionId string) bool {
 // (renewal, idle-bound durability, lifetime-stamp durability) is decided in one
 // place, and so the FIX 4 backfill rule cannot drift from the machinery that
 // carries it.
-func (toa *TraefikOidcAuth) sessionStoreDue(sessionId string, updatedSession bool) bool {
+func (toa *Gatepost) sessionStoreDue(sessionId string, updatedSession bool) bool {
 	return updatedSession ||
 		toa.sessionIdleRefreshDue(sessionId) ||
 		toa.sessionLifetimeStampDue(sessionId)
@@ -657,7 +657,7 @@ func (toa *TraefikOidcAuth) sessionStoreDue(sessionId string, updatedSession boo
 // The per-request AuthorizationHeader/AuthorizationCookie pseudo-sessions are
 // excluded for the same reason as in sessionIdleRefreshDue: they have no cookie of
 // their own, and re-storing one would mint a session cookie out of a header value.
-func (toa *TraefikOidcAuth) sessionLifetimeStampDue(sessionId string) bool {
+func (toa *Gatepost) sessionLifetimeStampDue(sessionId string) bool {
 	if toa.Config == nil || toa.Config.MaxSessionLifetimeSeconds <= 0 {
 		return false
 	}
@@ -719,7 +719,7 @@ func newTemplate() *template.Template {
 	return template.New("").Funcs(headerTemplateFuncs)
 }
 
-func (toa *TraefikOidcAuth) attachHeaders(req *http.Request, session *session.SessionState, claims map[string]interface{}, isPublicRoute bool, isAuthorized bool) error {
+func (toa *Gatepost) attachHeaders(req *http.Request, session *session.SessionState, claims map[string]interface{}, isPublicRoute bool, isAuthorized bool) error {
 	if toa.Config.Headers != nil {
 		evalContext := make(map[string]interface{})
 
@@ -810,7 +810,7 @@ func (toa *TraefikOidcAuth) attachHeaders(req *http.Request, session *session.Se
 // internalError logs the real reason server-side and returns a short generic
 // message. Internal error text carries IDP endpoints, config detail and
 // upstream URLs that must not reach an unauthenticated caller.
-func (toa *TraefikOidcAuth) internalError(rw http.ResponseWriter, publicMessage string, context string, err error) {
+func (toa *Gatepost) internalError(rw http.ResponseWriter, publicMessage string, context string, err error) {
 	if err != nil {
 		toa.logger.Log(logging.LevelError, "%s: %s", context, err.Error())
 	} else {
@@ -820,7 +820,7 @@ func (toa *TraefikOidcAuth) internalError(rw http.ResponseWriter, publicMessage 
 	http.Error(rw, publicMessage, http.StatusInternalServerError)
 }
 
-func (toa *TraefikOidcAuth) handleCallback(rw http.ResponseWriter, req *http.Request) {
+func (toa *Gatepost) handleCallback(rw http.ResponseWriter, req *http.Request) {
 	base64State := req.URL.Query().Get("state")
 	if base64State == "" {
 		toa.logger.Log(logging.LevelWarn, "State on callback request is missing.")
@@ -950,7 +950,7 @@ func (toa *TraefikOidcAuth) handleCallback(rw http.ResponseWriter, req *http.Req
 // It writes the error response itself and returns a non-nil error in that case;
 // a nil error means claims are usable. The bool returned by introspectToken is
 // honoured here: a revoked or expired token must not produce a session.
-func (toa *TraefikOidcAuth) validateCallbackToken(rw http.ResponseWriter, token *oidc.OidcTokenResponse, state *oidc.OidcState) (map[string]interface{}, error) {
+func (toa *Gatepost) validateCallbackToken(rw http.ResponseWriter, token *oidc.OidcTokenResponse, state *oidc.OidcState) (map[string]interface{}, error) {
 	tokenValidation := toa.Config.Provider.TokenValidation
 
 	var usedToken string
@@ -1031,7 +1031,7 @@ func (toa *TraefikOidcAuth) validateCallbackToken(rw http.ResponseWriter, token 
 //
 // A non-nil error means the session could not be sealed; the response has already
 // been answered with a 500 and the caller must return without touching rw again.
-func (toa *TraefikOidcAuth) establishSession(rw http.ResponseWriter, token *oidc.OidcTokenResponse, claims map[string]interface{}, state *oidc.OidcState) (*session.SessionState, error) {
+func (toa *Gatepost) establishSession(rw http.ResponseWriter, token *oidc.OidcTokenResponse, claims map[string]interface{}, state *oidc.OidcState) (*session.SessionState, error) {
 	isAuthorized := isAuthorized(toa.logger, toa.Config.Authorization, claims)
 
 	sess := &session.SessionState{
@@ -1055,7 +1055,7 @@ func (toa *TraefikOidcAuth) establishSession(rw http.ResponseWriter, token *oidc
 	return sess, nil
 }
 
-func (toa *TraefikOidcAuth) handleLogout(rw http.ResponseWriter, req *http.Request, session *session.SessionState) {
+func (toa *Gatepost) handleLogout(rw http.ResponseWriter, req *http.Request, session *session.SessionState) {
 	sessionId := ""
 	if session != nil {
 		sessionId = session.Id
@@ -1134,7 +1134,7 @@ func secureStringEqual(a, b string) bool {
 // let a single unauthenticated GET (an <img> tag, an iframe) log any visitor
 // out. Both are therefore required and compared against the session in constant
 // time; a rejected notification never clears the cookie.
-func (toa *TraefikOidcAuth) handleFrontchannelLogout(rw http.ResponseWriter, req *http.Request, sess *session.SessionState, claims map[string]interface{}) {
+func (toa *Gatepost) handleFrontchannelLogout(rw http.ResponseWriter, req *http.Request, sess *session.SessionState, claims map[string]interface{}) {
 	iss := req.URL.Query().Get("iss")
 	if iss == "" {
 		toa.logger.Log(logging.LevelWarn, "Frontchannel logout rejected: iss is missing")
@@ -1197,7 +1197,7 @@ func (toa *TraefikOidcAuth) handleFrontchannelLogout(rw http.ResponseWriter, req
 	toa.writeSuccessfulLogout(rw, req)
 }
 
-func (toa *TraefikOidcAuth) writeSuccessfulLogout(rw http.ResponseWriter, req *http.Request) {
+func (toa *Gatepost) writeSuccessfulLogout(rw http.ResponseWriter, req *http.Request) {
 	rw.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
 	data := make(map[string]interface{})
@@ -1214,7 +1214,7 @@ func (toa *TraefikOidcAuth) writeSuccessfulLogout(rw http.ResponseWriter, req *h
 	errorPages.WriteError(toa.logger, &errorPages.ErrorPageConfig{}, rw, req, data)
 }
 
-func (toa *TraefikOidcAuth) handleUnauthenticated(rw http.ResponseWriter, req *http.Request) {
+func (toa *Gatepost) handleUnauthenticated(rw http.ResponseWriter, req *http.Request) {
 	switch toa.Config.UnauthenticatedBehavior {
 	case "Challenge":
 		// Handle login
@@ -1240,7 +1240,7 @@ func (toa *TraefikOidcAuth) handleUnauthenticated(rw http.ResponseWriter, req *h
 	}
 }
 
-func (toa *TraefikOidcAuth) writeUnauthenticatedError(rw http.ResponseWriter, req *http.Request) {
+func (toa *Gatepost) writeUnauthenticatedError(rw http.ResponseWriter, req *http.Request) {
 	data := make(map[string]interface{})
 
 	data["statusType"] = "https://tools.ietf.org/html/rfc9110#section-15.5.2"
@@ -1258,7 +1258,7 @@ func (toa *TraefikOidcAuth) writeUnauthenticatedError(rw http.ResponseWriter, re
 
 // handleUnauthorized handles a valid session that fails Authorization rules.
 // redirectUrlOverride is empty on normal requests; from handleCallback it is the original destination.
-func (toa *TraefikOidcAuth) handleUnauthorized(rw http.ResponseWriter, req *http.Request, session *session.SessionState, redirectUrlOverride string) {
+func (toa *Gatepost) handleUnauthorized(rw http.ResponseWriter, req *http.Request, session *session.SessionState, redirectUrlOverride string) {
 	switch toa.Config.UnauthorizedBehavior {
 	case "Challenge":
 		if !session.ChallengeAttempted && utils.IsHtmlRequest(req) {
@@ -1283,7 +1283,7 @@ func (toa *TraefikOidcAuth) handleUnauthorized(rw http.ResponseWriter, req *http
 	}
 }
 
-func (toa *TraefikOidcAuth) writeUnauthorizedError(rw http.ResponseWriter, req *http.Request) {
+func (toa *Gatepost) writeUnauthorizedError(rw http.ResponseWriter, req *http.Request) {
 	data := make(map[string]interface{})
 
 	data["statusType"] = "https://tools.ietf.org/html/rfc9110#section-15.5.4"
@@ -1304,7 +1304,7 @@ func (toa *TraefikOidcAuth) writeUnauthorizedError(rw http.ResponseWriter, req *
 
 // handleLogin starts the OIDC login flow. Non-empty redirectUrlOverride wins over request-derived targets
 // (used when re-challenging from handleCallback where req is the callback URL).
-func (toa *TraefikOidcAuth) handleLogin(rw http.ResponseWriter, req *http.Request, isChallenge bool, redirectUrlOverride string) {
+func (toa *Gatepost) handleLogin(rw http.ResponseWriter, req *http.Request, isChallenge bool, redirectUrlOverride string) {
 	toa.logger.Log(logging.LevelInfo, "login start challenge=%t host=%s method=%s path=%s",
 		isChallenge, req.Host, req.Method, req.URL.Path)
 	var redirectUrl string
@@ -1344,7 +1344,7 @@ func (toa *TraefikOidcAuth) handleLogin(rw http.ResponseWriter, req *http.Reques
 	}
 }
 
-func (toa *TraefikOidcAuth) needsDoubleRedirect(req *http.Request) bool {
+func (toa *Gatepost) needsDoubleRedirect(req *http.Request) bool {
 	if toa.Config.Provider.UsePkceBool {
 		host := toa.fullHost(req)
 		callbackUrl := toa.GetAbsoluteCallbackURL(req).String()
@@ -1372,7 +1372,7 @@ var reservedAuthorizationParams = map[string]bool{
 // isOverridableParam reports whether an incoming request may replace the
 // configured value of this authorizationParams key. The default - an empty
 // allowlist - means nothing is overridable.
-func (toa *TraefikOidcAuth) isOverridableParam(key string) bool {
+func (toa *Gatepost) isOverridableParam(key string) bool {
 	for _, allowed := range toa.Config.AuthorizationParamsOverridable {
 		if allowed == key {
 			return true
@@ -1385,7 +1385,7 @@ func (toa *TraefikOidcAuth) isOverridableParam(key string) bool {
 // applyAuthorizationParamOverrides writes the configured authorizationParams into
 // urlValues, letting an incoming request override a key only when that key is
 // listed in authorization_params_overridable.
-func (toa *TraefikOidcAuth) applyAuthorizationParamOverrides(urlValues url.Values, req *http.Request) {
+func (toa *Gatepost) applyAuthorizationParamOverrides(urlValues url.Values, req *http.Request) {
 	set := urlValues.Set
 	for key, value := range toa.Config.AuthorizationParams {
 		// src.New rejects reserved keys at startup. Skipping them here is
@@ -1415,7 +1415,7 @@ func (toa *TraefikOidcAuth) applyAuthorizationParamOverrides(urlValues url.Value
 	}
 }
 
-func (toa *TraefikOidcAuth) redirectToProvider(rw http.ResponseWriter, req *http.Request, redirectUrl string, isChallenge bool) {
+func (toa *Gatepost) redirectToProvider(rw http.ResponseWriter, req *http.Request, redirectUrl string, isChallenge bool) {
 	toa.logger.Log(logging.LevelDebug, "redirect to IdP host=%s clientId=%s returnTo=%s",
 		req.Host, toa.Config.Provider.ClientId, redirectUrl)
 
@@ -1507,7 +1507,7 @@ func (toa *TraefikOidcAuth) redirectToProvider(rw http.ResponseWriter, req *http
 	http.Redirect(rw, req, authorizationEndpointUrl.String(), http.StatusFound)
 }
 
-func (toa *TraefikOidcAuth) doubleRedirectToProvider(rw http.ResponseWriter, req *http.Request, redirectUrl string, isChallenge bool) {
+func (toa *Gatepost) doubleRedirectToProvider(rw http.ResponseWriter, req *http.Request, redirectUrl string, isChallenge bool) {
 	toa.logger.Log(logging.LevelDebug, "double-redirect to IdP via callback host=%s returnTo=%s", req.Host, redirectUrl)
 
 	callbackUrl := toa.GetAbsoluteCallbackURL(req)

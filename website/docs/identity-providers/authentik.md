@@ -27,7 +27,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://login.my-authentik.com/application/o/<app-slug>"
             clientId: "<YourClientId>"

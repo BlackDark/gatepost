@@ -1,4 +1,4 @@
-# Code of Conduct - traefik-oidc-auth
+# Code of Conduct - gatepost
 
 ## Our Pledge
 

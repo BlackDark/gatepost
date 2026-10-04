@@ -29,7 +29,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://login.my-keycloak.com/realms/<myRealm>"
             clientId: "<YourClientId>"

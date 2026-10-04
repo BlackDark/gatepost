@@ -27,5 +27,5 @@ func (logger *Logger) Log(level string, format string, a ...interface{}) {
 	}
 
 	currentTime := time.Now().Format("2006-01-02 15:04:05")
-	os.Stdout.WriteString(currentTime + " [" + level + "]" + " [traefik-oidc-auth] " + fmt.Sprintf(format, a...) + "\n")
+	os.Stdout.WriteString(currentTime + " [" + level + "]" + " [gatepost] " + fmt.Sprintf(format, a...) + "\n")
 }

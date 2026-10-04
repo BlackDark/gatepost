@@ -2,7 +2,4 @@
 **/.DS_Store
 .idea
 /bin/
-/cmd/extauth-server/extauth-server
-
-# Local git worktrees (ce-worktree)
-.worktrees/
+/cmd/gatepost-extauthz/gatepost-extauthz

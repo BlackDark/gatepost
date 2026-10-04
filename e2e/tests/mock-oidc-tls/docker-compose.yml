@@ -59,7 +59,7 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "../../../workspaces/configs/traefik-config.yml:/etc/traefik/traefik.yml:ro"
-      - "../../..:/plugins-local/src/github.com/BlackDark/test-oidc-traefik-plugin:ro"
+      - "../../..:/plugins-local/src/github.com/BlackDark/gatepost:ro"
       # .http-tls.yml, not .http.yml: configureTraefik stamps a per-write
       # CookieNamePrefix and both suites bind-mount their file to the same
       # in-container path, so a shared fixed name would let each stack's tests

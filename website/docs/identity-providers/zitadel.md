@@ -48,7 +48,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://your-instance.zitadel.cloud"
             clientId: "<YourClientId>"
@@ -64,7 +64,7 @@ http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://your-instance.zitadel.cloud"
             clientId: "<YourClientId>"
@@ -86,7 +86,7 @@ The easiest way to ensure that only users with a role are allowed to authenticat
 
 This type of authorization is handled completely within ZITADEL but all users are allowed which have at least one role assigned.
 
-For a more granular authorization you can use the Authorization-feature of *traefik-oidc-auth*.
+For a more granular authorization you can use the Authorization-feature of *gatepost*.
 
 1. First, we need to ensure the roles are mapped within the tokens. Navigate to the *Token Settings* of your application and enable *Add user roles to the access token*.
 2. In the top menu of the ZITADEL console navigate to *Actions*
@@ -117,14 +117,14 @@ The script's name has to match the function name.
 7. Assign your `flatRoles` action and Save.
 
 With this configuration, the access token should now contain a flat list of `roles`, containing all roles, assigned to the user.
-We can now easily assert these roles with the following *traefik-oidc-auth* configuration:
+We can now easily assert these roles with the following *gatepost* configuration:
 
 ```yml
 http:
   middlewares:
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           provider:
             url: "https://your-instance.zitadel.cloud"
             clientId: "<YourClientId>"

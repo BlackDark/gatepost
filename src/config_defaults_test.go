@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
+	"github.com/BlackDark/gatepost/src/config"
 )
 
 func TestNew_RefusesDefaultSecret(t *testing.T) {
@@ -65,7 +65,7 @@ func TestNew_RedirectURIWildcardsOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	oidcMiddleware, ok := middleware.(*TraefikOidcAuth)
+	oidcMiddleware, ok := middleware.(*Gatepost)
 	if !ok {
 		t.Fatalf("New() returned %T", middleware)
 	}

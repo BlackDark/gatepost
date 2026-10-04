@@ -14,13 +14,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING CHANGE**: the project is now named `gatepost`. The repository, Go
+  module path, Traefik catalog name, dynamic-config key, log prefix, and the
+  standalone binary were all renamed together:
+
+  | Before | After |
+  |---|---|
+  | `github.com/BlackDark/test-oidc-traefik-plugin` | `github.com/BlackDark/gatepost` |
+  | `cmd/gatepost-extauthz` | `cmd/gatepost-extauthz` |
+  | dynamic-config key `traefik-oidc-auth:` | `gatepost:` |
+  | log prefix `[traefik-oidc-auth]` | `[gatepost]` |
+  | default `cookieNamePrefix` `TraefikOidcAuth` | `Gatepost` |
+  | `docs/extauth-server.md` | `docs/gatepost-extauthz.md` |
+
+  Traefik users must rename the middleware key in their dynamic configuration
+  (`traefik.http.middlewares.<name>.plugin.traefik-oidc-auth.*` →
+  `...plugin.gatepost.*`), not just the `import:` path. The Go type behind the
+  middleware is now `src.Gatepost`.
+
+  The default session cookie prefix changed with the name, so existing
+  `TraefikOidcAuth.*` cookies are ignored after the upgrade and every user logs
+  in once. Operators who set `cookieNamePrefix` explicitly are unaffected.
+
 ### Security
 
 - Updated the Go toolchain floor to 1.26.8 in both modules. Go 1.26.5 carried
   five published standard library vulnerabilities (including `encoding/asn1`
   recursion depth and `net/http` Punycode label handling) reachable from this
   code; `govulncheck` was failing on `main` before this branch.
-- Updated `google.golang.org/grpc` to v1.83.2 in `cmd/extauth-server`, fixing a
+- Updated `google.golang.org/grpc` to v1.83.2 in `cmd/gatepost-extauthz`, fixing a
   server panic on requests with a missing authority/Host header
   (GO-2026-6443) and heap exhaustion via HTTP/2 DATA frame fragmentation
   (GO-2026-6348). Both were reachable from the gRPC ext_authz listener.
@@ -129,7 +153,7 @@ preserves the old behaviour, are:
   `provider.clientId`, `provider.oidcTimeoutSeconds`,
   `provider.revokeTokensOnLogout`, `provider.maxAuthAgeSeconds`). A snake_case
   key silently decodes to its zero value — the option appears configured and
-  does nothing. `cmd/extauth-server`'s `CONFIG_FILE` is a different surface: it
+  does nothing. `cmd/gatepost-extauthz`'s `CONFIG_FILE` is a different surface: it
   is decoded with `encoding/json`, so it uses the snake_case `json` tags
   (`log_level`, `session_cookie`, `cookie_name_prefix`,
   `max_session_lifetime_seconds`, `provider.client_id`,
@@ -137,9 +161,9 @@ preserves the old behaviour, are:
   are **not** even the same option:
   - **`trustedProxies` / `trusted_proxies` are different mechanisms.** The
     Traefik plugin gates its `X-Forwarded-*` handling on the `trustedProxies`
-    **config key**. `extauth-server` gates the same handling on the
+    **config key**. `gatepost-extauthz` gates the same handling on the
     **`TRUSTED_PROXIES` environment variable** (`parseTrustedProxies(os.Getenv(...))`
-    in `cmd/extauth-server/main.go`, matched against the TCP peer in
+    in `cmd/gatepost-extauthz/main.go`, matched against the TCP peer in
     `forwardedRequest`); the `trusted_proxies` key in `CONFIG_FILE` decodes into
     `config.TrustedProxies` and is never read on that path. Setting one does not
     set the other.
@@ -192,7 +216,7 @@ preserves the old behaviour, are:
   **rightmost** entry, not the leftmost. In an appending proxy chain the entry a
   trusted hop added is the rightmost one, so the leftmost was client-controlled
   and could steer the `redirect_uri` sent to the IDP and the absolute URLs this
-  plugin emits. The standalone `extauth-server` had the same defect plus no
+  plugin emits. The standalone `gatepost-extauthz` had the same defect plus no
   scheme allowlist; both are fixed.
 - **Security:** an `includeWhen: Always` header on the bypass-rule and
   `Forward` paths rendered the literal `<no value>`, because templating ran
@@ -215,7 +239,7 @@ preserves the old behaviour, are:
   `snake_case` and would have been silently ignored by every Traefik
   deployment. Documentation now uses the camelCase Go field names, and a test
   guards the divergence (see Added).
-- The `extauth-server` `CONFIG_FILE` example in the docs could not be loaded:
+- The `gatepost-extauthz` `CONFIG_FILE` example in the docs could not be loaded:
   `revoke_tokens_on_logout` is a string field, so a JSON boolean aborted
   startup with exit code 1. `trusted_proxies` was also documented for
   `CONFIG_FILE`, where it is inert - HTTP mode is gated by the `TRUSTED_PROXIES`
@@ -254,17 +278,17 @@ Standalone ext_authz service release, plus workflow hardening.
 
 ### Added
 
-- Standalone `ext_authz` service (`cmd/extauth-server/`) exposing the shared OIDC
+- Standalone `ext_authz` service (`cmd/gatepost-extauthz/`) exposing the shared OIDC
   session and authorization core over HTTP and gRPC, for use behind Envoy Gateway
   (`SecurityPolicy`), Traefik `forwardAuth`, and any other `ext_authz`-compatible
   gateway. Recorded in [ADR-0005](docs/adr/0005-standalone-ext-authz-service/).
 - `docs/extauth-server.md` — usage, gateway compatibility, and a full security
   review of the new service.
-- Release-image workflow publishing `cmd/extauth-server` as a multi-architecture
+- Release-image workflow publishing `cmd/gatepost-extauthz` as a multi-architecture
   container image from any `v*` tag.
 - `zizmor` workflow linting GitHub Actions for security issues, and a Dependabot
   cooldown so the scan stays green.
-- `cmd/extauth-server` is covered as its own Go module in CI.
+- `cmd/gatepost-extauthz` is covered as its own Go module in CI.
 
 ### Changed
 

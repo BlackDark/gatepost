@@ -105,7 +105,7 @@ Status codes alone are not sufficient; each case also asserts a plugin log marke
 
 **[SPEC]** Two orthogonal channels make each case unambiguous:
 
-1. **Plugin log prefix.** Every plugin line is `[traefik-oidc-auth]`. *Present* ⇒ the
+1. **Plugin log prefix.** Every plugin line is `[gatepost]`. *Present* ⇒ the
    middleware was constructed and reached a decision. *Absent* ⇒ `New()` rejected the
    config — a completely different bug (T7–T9).
 2. **Log content.** `Loaded CA bundle …` proves the option was *parsed*;

@@ -13,12 +13,12 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/config"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/logging"
-	"github.com/BlackDark/test-oidc-traefik-plugin/src/oidc"
+	"github.com/BlackDark/gatepost/src/config"
+	"github.com/BlackDark/gatepost/src/logging"
+	"github.com/BlackDark/gatepost/src/oidc"
 )
 
-func newGetUserInfoTest(t *testing.T, handler http.HandlerFunc) (*TraefikOidcAuth, *httptest.Server) {
+func newGetUserInfoTest(t *testing.T, handler http.HandlerFunc) (*Gatepost, *httptest.Server) {
 	server := httptest.NewServer(handler)
 
 	config := &config.Config{
@@ -28,7 +28,7 @@ func newGetUserInfoTest(t *testing.T, handler http.HandlerFunc) (*TraefikOidcAut
 
 	logger := logging.CreateLogger(logging.LevelDebug)
 
-	toa := &TraefikOidcAuth{
+	toa := &Gatepost{
 		logger:     logger,
 		Config:     config,
 		httpClient: server.Client(),
@@ -431,7 +431,7 @@ func generateRSAKey() (*rsa.PrivateKey, error) {
 }
 
 // setupJWKS sets up a JWKS server for JWT verification in tests
-func setupJWKS(t *testing.T, toa *TraefikOidcAuth, privateKey *rsa.PrivateKey) *httptest.Server {
+func setupJWKS(t *testing.T, toa *Gatepost, privateKey *rsa.PrivateKey) *httptest.Server {
 	publicKey := &privateKey.PublicKey
 	jwk := oidc.JwksKey{
 		Kid: "test-kid",

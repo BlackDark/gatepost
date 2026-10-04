@@ -14,8 +14,8 @@ Enable the plugin in your traefik configuration.
 ```yml
 experimental:
   plugins:
-    traefik-oidc-auth:
-      moduleName: "github.com/BlackDark/test-oidc-traefik-plugin"
+    gatepost:
+      moduleName: "github.com/BlackDark/gatepost"
       version: "v0.20.1"
 ```
 
@@ -43,7 +43,7 @@ http:
   # highlight-start
     oidc-auth:
       plugin:
-        traefik-oidc-auth:
+        gatepost:
           secret: "MLFs4TT99kOOq8h3UAVRtYoCTDYXiRcZ" # Please change this secret for your setup
           provider:
             url: "https://<YourIdentityProviderUrl>"
@@ -87,7 +87,7 @@ metadata:
 spec:
   # highlight-start
   plugin:
-    traefik-oidc-auth: # same key as in the static configuration
+    gatepost: # same key as in the static configuration
       secret: "urn:k8s:secret:oidc-secret:pluginSecret"
       provider:
         # You could just write strings here for the values.
