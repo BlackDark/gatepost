@@ -3,3 +3,6 @@
 .idea
 /bin/
 /cmd/extauth-server/extauth-server
+
+# Local git worktrees (ce-worktree)
+.worktrees/

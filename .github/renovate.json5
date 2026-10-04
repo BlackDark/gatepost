@@ -1,0 +1,30 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["github>blackdark/renovate-base//default.json5", ":pinVersions"],
+  postUpdateOptions: ["gomodTidy"],
+  automergeType: "pr",
+  // Refreshed by `task vendor`, which Renovate cannot run.
+  ignorePaths: ["**/node_modules/**", "**/vendor/**"],
+  packageRules: [
+    // The base groups by npm depType, which Go modules do not have.
+    {
+      matchManagers: ["gomod", "golang-version"],
+      matchUpdateTypes: ["minor", "patch", "pin"],
+      groupName: "go modules (non-major)",
+      groupSlug: "go-modules-non-major",
+    },
+  ],
+  customManagers: [
+    // Compose-file `image:` pins that no manifest manager sees. The validator requires
+    // both a depName and a currentValue group.
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^workspaces\\/.*\\.ya?ml$/",
+        "/^e2e\\/tests\\/.*docker-compose\\.ya?ml$/",
+      ],
+      matchStrings: ["image:\\s*[\"']?(?<depName>[\\w./-]+):(?<currentValue>[\\w.-]+)[\"']?"],
+      datasourceTemplate: "docker",
+    },
+  ],
+}
