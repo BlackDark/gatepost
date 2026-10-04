@@ -15,8 +15,14 @@ on:
 permissions: {}
 
 concurrency:
-  group: release-extauth-server-${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || inputs.tag }}
-  cancel-in-progress: true
+  group: release-extauth-server-${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || inputs.tag || github.run_id }}
+  # Must stay false. The group keys on the tag, and one release fires two
+  # events for it (`push: tags: ['v*']` and `release: published`) that land in
+  # the same group, so the newer event killed the older one mid-publish. Runs
+  # for one tag now queue behind each other. Different tags never shared a
+  # group. github.run_id covers workflow_dispatch with no `tag` input, which
+  # resolves its tag at runtime and has no tag to group by.
+  cancel-in-progress: false
 
 jobs:
   # Fast, fail-closed tag gate that runs BEFORE any build and BEFORE the
@@ -31,10 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read # read the registry to check for an existing push
     # Declared (not just implicit) so `needs.validate-tag.outputs.tag` type-checks
     # under actionlint; the value is identical either way.
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
+      already-published: ${{ steps.published.outputs.already-published }}
     steps:
       # Every publish path (release event, tag push, manual dispatch) converges
       # on one tag. Resolution must happen before validation, so it lives here
@@ -75,11 +83,36 @@ jobs:
           fi
           echo "release tag $TAG accepted"
 
+      # The queued run must not publish. BuildKit stamps layer times into the
+      # image config, so a rebuild of the same commit gets a different digest
+      # and would move :0.x.y and :latest after a reviewer approved the first
+      # push. This runs outside the `release` environment, so the duplicate
+      # skips before it asks for approval. An unreadable registry leaves the
+      # output empty and the publish proceeds. A push that died before its
+      # manifest landed left no tag behind, so a retry is not skipped either.
+      - name: Check whether this version is already published
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -uo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/extauth-server"
+          if ! echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin; then
+            echo "::notice::could not authenticate to ghcr.io - publishing anyway"
+            exit 0
+          fi
+          if docker buildx imagetools inspect "${image}:${TAG#v}" >/dev/null 2>&1; then
+            echo "already-published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${image}:${TAG#v} is already published - skipping the build and push"
+          fi
+
   build-and-push:
     name: Build and push image
     # Hard gate: nothing is built, no environment is entered, and no approval is
-    # requested unless validate-tag passed. Fail-closed by construction.
+    # requested unless validate-tag passed and the tag is not already published.
     needs: validate-tag
+    if: needs.validate-tag.outputs.already-published != 'true'
     runs-on: ubuntu-latest
     # Publishing an auth component needs a deliberate, auditable gate: the
     # environment can hold required reviewers and deployment branch rules.
