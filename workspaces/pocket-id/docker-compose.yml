@@ -1,6 +1,6 @@
 services:
   pocketId:
-    image: ghcr.io/pocket-id/pocket-id:v1.16.0
+    image: ghcr.io/pocket-id/pocket-id:v1.16.0@sha256:f8cde808e8e840acda25683fc2168e0206e3f3fb1a48cca89d211aafd87eaeef
     restart: unless-stopped
     ports:
       - 1411:1411
@@ -10,7 +10,7 @@ services:
       - "pocketId_data:/app/data"
 
   traefik:
-    image: "traefik:v3.7.14"
+    image: "traefik:v3.7.14@sha256:e849695bc5c317da0cec22bfee4794fd9e15871fe554f864d31b625983e883ff"
     ports:
       - "9080:80"
       - "8080:8080"
@@ -25,7 +25,7 @@ services:
       - ./.env
 
   whoami:
-    image: "traefik/whoami:v1.12.0"
+    image: "traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44"
 
 volumes:
   pocketId_data:

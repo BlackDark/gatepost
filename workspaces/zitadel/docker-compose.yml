@@ -1,7 +1,7 @@
 services:
   zitadel-db:
     restart: unless-stopped
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     volumes:
       - "zitadel_postgres_data:/var/lib/postgresql/data"
     environment:
@@ -16,7 +16,7 @@ services:
 
   zitadel:
     restart: unless-stopped
-    image: 'ghcr.io/zitadel/zitadel:v3.4.15'
+    image: 'ghcr.io/zitadel/zitadel:v3.4.15@sha256:14d80ccfdd6dc6a14a71c1bb4e448a15a182f72be372cebffeb995dafabfac28'
     command: 'start-from-init --masterkey "qdUMkPmL6odwLoAXuL5zZ5ujmO294iKo" --tlsMode disabled'
     volumes:
       - ./machinekey:/machinekey
@@ -60,7 +60,7 @@ services:
       start_period: '20s'
 
   traefik:
-    image: "traefik:v3.7.14"
+    image: "traefik:v3.7.14@sha256:e849695bc5c317da0cec22bfee4794fd9e15871fe554f864d31b625983e883ff"
     ports:
       - "9080:80"
       - "8080:8080"
@@ -75,7 +75,7 @@ services:
       - ./.env
 
   whoami:
-    image: "traefik/whoami:v1.12.0"
+    image: "traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44"
 
 volumes:
   zitadel_postgres_data:
