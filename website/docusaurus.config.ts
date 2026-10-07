@@ -9,10 +9,9 @@ const config: Config = {
   tagline: 'OIDC authentication for Traefik and ext_authz gateways',
   favicon: 'img/favicon.ico',
 
-  // Set the production url of your site here
-  url: 'https://github.com/BlackDark/gatepost',
-  // Set the /<baseUrl>/ pathname under which your site is served
-  // For GitHub pages deployment, it is often '/<projectName>/'
+  // Origin only. Docusaurus rejects a url that contains a path, and this
+  // site is not deployed anywhere yet.
+  url: 'https://blackdark.github.io',
   baseUrl: '/',
 
   // GitHub pages deployment config.
