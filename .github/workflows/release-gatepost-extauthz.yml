@@ -97,7 +97,7 @@ jobs:
           TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           set -uo pipefail
-          image="ghcr.io/${GITHUB_REPOSITORY,,}/extauth-server"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/gatepost-extauthz"
           if ! echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin; then
             echo "::notice::could not authenticate to ghcr.io - publishing anyway"
             exit 0
