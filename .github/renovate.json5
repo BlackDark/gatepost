@@ -14,17 +14,4 @@
       groupSlug: "go-modules-non-major",
     },
   ],
-  customManagers: [
-    // Compose-file `image:` pins that no manifest manager sees. The validator requires
-    // both a depName and a currentValue group.
-    {
-      customType: "regex",
-      managerFilePatterns: [
-        "/^workspaces\\/.*\\.ya?ml$/",
-        "/^e2e\\/tests\\/.*docker-compose\\.ya?ml$/",
-      ],
-      matchStrings: ["image:\\s*[\"']?(?<depName>[\\w./-]+):(?<currentValue>[\\w.-]+)[\"']?"],
-      datasourceTemplate: "docker",
-    },
-  ],
 }

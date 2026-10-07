@@ -33,7 +33,7 @@ body:
         * Are you running Traefik on Docker, or Kubernetes, or on something else?
         * Any special circumstances, like self-signed TLS certificates, or similar?
       placeholder: |-
-        * Traefik v3.5.0
+        * Traefik v3.7.14
         * plugin version v0.20.1
         * IDP: Dex v2.41.0
         All running on Docker.

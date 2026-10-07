@@ -44,8 +44,8 @@ async function fileOidcPrefixes(): Promise<string[] | null> {
   const middlewares = await fetchJson<TraefikMiddleware[]>(MIDDLEWARES_API);
   if (!Array.isArray(middlewares)) return null;
   return middlewares
-    .filter((m) => m.provider === 'file' && m.plugin?.['gatepost'])
-    .map((m) => m.plugin?.['gatepost']?.CookieNamePrefix ?? '');
+    .filter((m) => m.provider === 'file' && m.plugin?.gatepost)
+    .map((m) => m.plugin?.gatepost?.CookieNamePrefix ?? '');
 }
 
 export async function configureTraefik(

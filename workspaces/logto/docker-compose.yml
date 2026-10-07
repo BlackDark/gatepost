@@ -28,7 +28,7 @@ services:
       retries: 5
 
   traefik:
-    image: "traefik:v3.5.0"
+    image: "traefik:v3.7.14"
     ports:
       - "9080:80"
       - "8080:8080"
@@ -46,7 +46,7 @@ services:
       VALIDATE_AUDIENCE: true
 
   whoami:
-    image: "traefik/whoami:latest"
+    image: "traefik/whoami:v1.12.0"
 
 volumes:
   logto_postgres_data:

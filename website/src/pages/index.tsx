@@ -11,6 +11,7 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
+import type { ReactElement } from 'react';
 
 import styles from './index.module.css';
 
@@ -83,7 +84,7 @@ const IDENTITY_PROVIDERS = [
   'ZITADEL',
 ];
 
-export default function Home(): JSX.Element {
+export default function Home(): ReactElement {
   const { siteConfig } = useDocusaurusContext();
   return (
     <Layout

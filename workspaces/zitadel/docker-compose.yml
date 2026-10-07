@@ -16,7 +16,7 @@ services:
 
   zitadel:
     restart: unless-stopped
-    image: 'ghcr.io/zitadel/zitadel:v3.2.3'
+    image: 'ghcr.io/zitadel/zitadel:v3.4.15'
     command: 'start-from-init --masterkey "qdUMkPmL6odwLoAXuL5zZ5ujmO294iKo" --tlsMode disabled'
     volumes:
       - ./machinekey:/machinekey
@@ -60,7 +60,7 @@ services:
       start_period: '20s'
 
   traefik:
-    image: "traefik:v3.5.0"
+    image: "traefik:v3.7.14"
     ports:
       - "9080:80"
       - "8080:8080"
@@ -75,7 +75,7 @@ services:
       - ./.env
 
   whoami:
-    image: "traefik/whoami:latest"
+    image: "traefik/whoami:v1.12.0"
 
 volumes:
   zitadel_postgres_data:

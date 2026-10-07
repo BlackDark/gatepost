@@ -42,7 +42,7 @@ services:
       start_period: 3s
 
   traefik:
-    image: traefik:v3.5.0
+    image: traefik:v3.7.14
     # Deliberately different from the mock-oidc stack's 9080/9443/8080 so the
     # two suites can be up at the same time on one runner.
     ports:
@@ -82,6 +82,6 @@ services:
         condition: service_healthy
 
   whoami:
-    # Pinned like its siblings: whoami has no v3.x line to match traefik:v3.5.0,
+    # Pinned like its siblings: whoami has no v3.x line to match traefik:v3.7.14,
     # so pin its newest 1.x release instead of the floating :latest.
     image: "traefik/whoami:v1.12.0"

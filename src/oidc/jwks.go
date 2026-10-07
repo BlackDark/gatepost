@@ -381,13 +381,25 @@ func extractEcdsaKey(key *JwksKey) (*EcdsaKey, error) {
 		return nil, fmt.Errorf("unsupported or empty elliptic curve %q for key %q", key.Crv, key.Kid)
 	}
 
+	// SEC 1 uncompressed point: 0x04 || X || Y, each padded to the field size.
+	// ParseUncompressedPublicKey rejects coordinates that are off-curve.
+	// FillBytes panics when a coordinate does not fit the field width.
+	size := (curve.Params().BitSize + 7) / 8
+	if decodedX.Sign() < 0 || decodedY.Sign() < 0 || decodedX.BitLen() > size*8 || decodedY.BitLen() > size*8 {
+		return nil, fmt.Errorf("invalid EC coordinates for key %q", key.Kid)
+	}
+	point := make([]byte, 1+2*size)
+	point[0] = 4
+	decodedX.FillBytes(point[1 : 1+size])
+	decodedY.FillBytes(point[1+size:])
+	pub, err := ecdsa.ParseUncompressedPublicKey(curve, point)
+	if err != nil {
+		return nil, fmt.Errorf("invalid EC key %q: %w", key.Kid, err)
+	}
+
 	return &EcdsaKey{
 		kid: key.Kid,
-		key: &ecdsa.PublicKey{
-			Curve: curve,
-			X:     decodedX,
-			Y:     decodedY,
-		},
+		key: pub,
 	}, nil
 }
 
