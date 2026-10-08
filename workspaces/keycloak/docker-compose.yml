@@ -1,6 +1,6 @@
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.8.0
+    image: quay.io/keycloak/keycloak:26.8.0@sha256:b0f60d489d51c5d113390bdf5461d4c06e6051be026c05549f2e1e10ec352bcc
     restart: unless-stopped
     ports:
       - "8000:8080"
@@ -17,7 +17,7 @@ services:
     command: ['start-dev', '--import-realm']
 
   keycloak_postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     restart: unless-stopped
     environment:
       POSTGRES_DB: keycloak
@@ -28,7 +28,7 @@ services:
       - keycloak_postgres_data:/var/lib/postgresql/data
 
   traefik:
-    image: "traefik:v3.7.14"
+    image: "traefik:v3.7.14@sha256:e849695bc5c317da0cec22bfee4794fd9e15871fe554f864d31b625983e883ff"
     ports:
       - "9080:80"
       - "8080:8080"
@@ -46,7 +46,7 @@ services:
       VALIDATE_AUDIENCE: true
 
   whoami:
-    image: "traefik/whoami:v1.12.0"
+    image: "traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44"
 
 volumes:
   keycloak_postgres_data:

@@ -2,7 +2,7 @@ services:
   # Plain HTTP, exactly as the green mock-oidc project runs it. TLS is terminated
   # by tls-proxy below rather than here - see nginx.conf for why.
   mock-oauth2-server:
-    image: ghcr.io/navikt/mock-oauth2-server:5.0.2
+    image: ghcr.io/navikt/mock-oauth2-server:5.0.2@sha256:f625692f5bf84939f3d0af4931f2c0f038dca84c4f1bac1171710d544181f97f
     volumes:
       - ./config.json:/app/config.json:ro
       - ./login.html:/app/login.html:ro
@@ -20,7 +20,7 @@ services:
   # Presents the throwaway CA-signed leaf from ./gencerts.sh. This is the
   # certificate provider.cABundle has to trust.
   tls-proxy:
-    image: nginx:1.31.6-alpine
+    image: nginx:1.31.6-alpine@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
     ports:
       - "8443:8443"
     volumes:
@@ -42,7 +42,7 @@ services:
       start_period: 3s
 
   traefik:
-    image: traefik:v3.7.14
+    image: traefik:v3.7.14@sha256:e849695bc5c317da0cec22bfee4794fd9e15871fe554f864d31b625983e883ff
     # Deliberately different from the mock-oidc stack's 9080/9443/8080 so the
     # two suites can be up at the same time on one runner.
     ports:
@@ -84,4 +84,4 @@ services:
   whoami:
     # Pinned like its siblings: whoami has no v3.x line to match traefik:v3.7.14,
     # so pin its newest 1.x release instead of the floating :latest.
-    image: "traefik/whoami:v1.12.0"
+    image: "traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44"
