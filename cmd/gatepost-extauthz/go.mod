@@ -5,7 +5,7 @@ go 1.26.8
 require (
 	github.com/BlackDark/gatepost v0.21.1
 	github.com/envoyproxy/go-control-plane/envoy v1.39.0
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260729162451-8efbd57d26e0
 	google.golang.org/grpc v1.84.0
 	gopkg.in/yaml.v3 v3.0.1
