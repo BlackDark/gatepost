@@ -55,7 +55,9 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behaviour may be
-reported to the community leaders responsible for enforcement at <contact@danielpeinhopf.com>.
+reported to the community leaders responsible for enforcement via a
+[private security advisory](https://github.com/BlackDark/gatepost/security/advisories/new)
+(mark the report as a Code of Conduct concern in the description).
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

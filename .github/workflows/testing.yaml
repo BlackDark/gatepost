@@ -2,17 +2,10 @@ name: Run Go tests
 on:
   push:
     branches: [ main ]
-  # No paths filter here: a website-only change must still be gated by a build.
-  # website/** changes skip this workflow (they touch no Go code) but they DO run
-  # .github/workflows/lint.yml, whose website job runs `bun run build`. That
-  # build is load-bearing: docusaurus.config.ts sets onBrokenLinks: 'throw',
-  # so one bad relative link fails the whole site build. Removing the build step
-  # from lint.yml while keeping this paths-ignore would leave website PRs
-  # completely ungated - do not do that.
+  # No paths-ignore for docs/: src/config_dockeys_test.go walks docs/guide/** and
+  # must run when Traefik-facing docs change.
   pull_request:
     branches: [ main ]
-    paths-ignore:
-      - "website/**"
 
 permissions: {}
 

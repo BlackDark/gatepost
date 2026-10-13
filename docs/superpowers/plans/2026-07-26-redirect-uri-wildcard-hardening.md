@@ -53,7 +53,7 @@
 ### Task 3: Documentation cleanup
 
 **Files:**
-- Modify: `website/docs/getting-started/middleware-configuration.md`
+- Modify: `docs/guide/getting-started/middleware-configuration.md`
 - Modify: `README.md`
 
 - [ ] Document exact-match default and wildcard opt-in using camelCase keys.

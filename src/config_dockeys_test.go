@@ -41,14 +41,14 @@ import (
 //
 // An earlier version of this file only compared Go struct fields against a hardcoded table.
 // That catches a Go FIELD RENAME, but it never read a single byte of documentation: re-typing a
-// key in website/docs/**  (or in README.md) as snake_case left CI green, which is the exact
+// key in docs/guide/**  (or in README.md) as snake_case left CI green, which is the exact
 // regression the file claims to prevent - the spelling is the thing that reaches the operator,
 // not the struct tag. So the guard now has two halves:
 //
 //  1. the structural half (unchanged): every documented Traefik key must resolve to a real Go
 //     field by field name, the json tag must not be equal-folding to it, and the json tag must
 //     stay snake_case for CONFIG_FILE;
-//  2. the documentation half (new): the Traefik-facing docs - website/docs/**/*.md and
+//  2. the documentation half (new): the Traefik-facing docs - docs/guide/**/*.md and
 //     README.md - are actually READ and scanned for snake_case json tags sitting in a
 //     plausible config-key position, and every camelCase key in the table below must really
 //     appear there.
@@ -61,7 +61,7 @@ import (
 //   (a) YAML keys inside fenced code blocks tagged yml / yaml / json / toml. A line whose first
 //       token (optionally a quoted string, optionally after a "- " list marker) matches a
 //       snake_case json tag exactly, or matches the last segment of a dotted path.
-//   (b) Markdown table cells in website/docs/** + README.md whose whole content is a single
+//   (b) Markdown table cells in docs/guide/** + README.md whose whole content is a single
 //       backticked token (optionally followed by "*"), i.e. the "Name"/"Option"/"YAML key"
 //       column of an option reference table. Every column is scanned - there is no longer a
 //       second-surface column that snake_case would be legitimate in.
@@ -99,7 +99,7 @@ type dockey struct {
 	// fieldName is the expected Go field name, i.e. the case-insensitive key Traefik
 	// actually matches. It is asserted to exist rather than hardcoded into the lookup.
 	fieldName string
-	// documented says whether this key is supposed to appear in website/docs/** today.
+	// documented says whether this key is supposed to appear in docs/guide/** today.
 	// False means it is deliberately undocumented (e.g. the *_Bool shims, which exist for the
 	// encoding/json CONFIG_FILE surface and are not Traefik options), and the guard then
 	// requires that neither spelling shows up in the docs.
@@ -145,7 +145,7 @@ var configStructs = []reflect.Type{
 // path the string field (revokeTokensOnLogout: "true") is the documented option, while the
 // bool field exists so cmd/gatepost-extauthz's YAML CONFIG_FILE can carry a native boolean
 // instead of the string Traefik needs. See the casing table in
-// website/docs/getting-started/middleware-configuration.md.
+// docs/guide/getting-started/middleware-configuration.md.
 var traefikConfigKeys = []dockey{
 	// Top-level Config options.
 	{"maxSessionLifetimeSeconds", cfgType, "MaxSessionLifetimeSeconds", true},
@@ -214,7 +214,7 @@ var traefikConfigKeys = []dockey{
 	{"useClaimsFromUserInfoBool", provType, "UseClaimsFromUserInfoBool", false},
 
 	// Clock-skew leeway and nonce enforcement: real Traefik keys (mapstructure accepts the Go
-	// field names) that the website reference does not document yet. documented=false keeps the
+	// field names) that the docs/guide reference does not document yet. documented=false keeps the
 	// table honest in both directions: as soon as one of them is written down, this guard makes
 	// the author flip the flag, so the docs and the Go fields cannot drift apart unnoticed.
 	{"tokenClockSkewSeconds", provType, "TokenClockSkewSeconds", true},
@@ -314,7 +314,7 @@ func snakeTags(t *testing.T) map[string]string {
 const repoRootOverrideEnv = "TOA_DOCKEYS_REPO_ROOT"
 
 // findRepoRoot walks up from this source file's directory looking for the repository root,
-// identified by both website/docs/ and README.md existing. Using runtime.Caller means the
+// identified by both docs/guide/ and README.md existing. Using runtime.Caller means the
 // result does not depend on the working directory `go test` happened to run from.
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
@@ -338,7 +338,7 @@ func findRepoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	t.Fatalf("could not locate the repository root (no ancestor of %s contains both website/docs and README.md).\n"+
+	t.Fatalf("could not locate the repository root (no ancestor of %s contains both docs/guide and README.md).\n"+
 		"The Traefik-facing documentation is part of the guard; this test must fail loudly "+
 		"rather than pass vacuously when the docs move.\nSearched: %s",
 		filepath.Dir(thisFile), strings.Join(tried, ", "))
@@ -362,16 +362,16 @@ type docFile struct {
 	data []byte
 }
 
-// traefikDocs collects the Traefik-facing documentation: every *.md under website/docs plus
+// traefikDocs collects the Traefik-facing documentation: every *.md under docs/guide plus
 // the repository README.md.
 //
 // docs/gatepost-extauthz.md is EXCLUDED from the file walk simply because it does not live under
-// website/docs: it documents cmd/gatepost-extauthz's own CONFIG_FILE rather than the Traefik
+// docs/guide: it documents cmd/gatepost-extauthz's own CONFIG_FILE rather than the Traefik
 // middleware surface. Since that CONFIG_FILE became YAML it is camelCase too, so the old reason
 // ("snake_case json tags are correct there") no longer holds - the tripwire below stays only as
 // a guard against this file being pulled into a Traefik-facing scan.
 // docsRelPrefix is the repo-relative directory holding the Traefik-facing documentation.
-const docsRelPrefix = "website/docs/"
+const docsRelPrefix = "docs/guide/"
 
 func traefikDocs(t *testing.T, root string) []docFile {
 	t.Helper()
@@ -384,7 +384,7 @@ func traefikDocs(t *testing.T, root string) []docFile {
 			names = append(names, e.Name())
 		}
 		t.Fatalf("Traefik-facing documentation directory %s not found (stat error: %v).\n"+
-			"This guard reads website/docs/**/*.md and README.md; it must fail loudly instead of "+
+			"This guard reads docs/guide/**/*.md and README.md; it must fail loudly instead of "+
 			"passing vacuously when the docs are missing or were moved.\nContents of %s: %v",
 			abs, err, root, names)
 	}
@@ -423,7 +423,7 @@ func traefikDocs(t *testing.T, root string) []docFile {
 	sort.Slice(files, func(i, j int) bool { return files[i].rel < files[j].rel })
 
 	if len(files) < 5 {
-		t.Fatalf("only %d documentation files found under %s; expected the whole website/docs tree plus README.md", len(files), abs)
+		t.Fatalf("only %d documentation files found under %s; expected the whole docs/guide tree plus README.md", len(files), abs)
 	}
 	for _, f := range files {
 		if strings.HasSuffix(f.rel, "gatepost-extauthz.md") {
@@ -790,7 +790,7 @@ func TestTraefikConfigKeys(t *testing.T) {
 	t.Run("DocsDoNotUseSnakeCaseJsonTagsAsTraefikKeys", func(t *testing.T) {
 		// THE NEW GUARD. The structural checks above cannot see a documentation regression:
 		// re-typing `maxSessionLifetimeSeconds` as `max_session_lifetime_seconds` in
-		// website/docs/** leaves every Go field intact and CI green, while every Traefik
+		// docs/guide/** leaves every Go field intact and CI green, while every Traefik
 		// deployment silently loses the bound. So read the docs and look for the snake_case
 		// json tags in positions where a Traefik config key actually appears.
 		offenses := scanDocsForSnakeCaseKeys(docs, tags)
@@ -808,9 +808,9 @@ func TestTraefikConfigKeys(t *testing.T) {
 
 	t.Run("DocumentedCamelCaseKeysAppearInTheDocs", func(t *testing.T) {
 		// Positive half: the docs and the Go fields cannot drift apart. Every key the table
-		// marks as documented must really show up under website/docs/** - the reference the
+		// marks as documented must really show up under docs/guide/** - the reference the
 		// operator actually reads - and every key marked as deliberately undocumented must NOT
-		// show up anywhere in the Traefik-facing docs (website/docs/** plus README.md), so an
+		// show up anywhere in the Traefik-facing docs (docs/guide/** plus README.md), so an
 		// author who documents one is forced to flip the flag rather than let the two surfaces
 		// drift apart unnoticed.
 		corpus := map[string]map[string]bool{} // key -> files containing it

@@ -10,10 +10,6 @@ import: github.com/BlackDark/gatepost/src
 # A brief description of what your plugin is doing.
 summary: "OIDC relying party for Traefik, hardened from traefik-oidc-auth: sealed OIDC state, PKCE-in-state, login CSRF, nonce, safer defaults."
 
-# Medias associated to the plugin (optional)
-iconPath: .assets/icon.png
-# bannerPath: .assets/banner.png
-
 # Configuration data for your plugin.
 # This is mandatory, and Plugins Catalog will try to execute the plugin with the data you provide as part of its startup validity tests.
 testData:

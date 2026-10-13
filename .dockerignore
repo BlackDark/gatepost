@@ -28,8 +28,6 @@ e2e/tests/mock-oidc-tls/certificates/
 e2e/playwright-report/
 e2e/test-results/
 
-# Docs and review notes are not needed to compile the binary
+# Docs are not needed to compile the binary
 docs/
-website/
-REVIEW.md
 CODE_OF_CONDUCT.md
