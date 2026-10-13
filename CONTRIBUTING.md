@@ -27,7 +27,8 @@ All types of contributions are encouraged and valued. See the [Table of Contents
 This project and everyone participating in it is governed by the
 [gatepost Code of Conduct](https://github.com/BlackDark/gatepost/blob/main/CODE_OF_CONDUCT.md).
 By participating, you are expected to uphold this code. Please report unacceptable behavior
-to <contact@danielpeinhopf.com>.
+via a [private security advisory](https://github.com/BlackDark/gatepost/security/advisories/new)
+(mark the report as a Code of Conduct concern in the description).
 
 
 ## I Have a Question
@@ -116,7 +117,7 @@ include Setup of env, IDE and typical getting started instructions?
 
 Documentation is one of the most important components of good software. That's why we welcome any improvements to our documentation by submitting a pull request.
 
-The documentation is contained in the `/website`-folder and is using [Docusaurus](https://docusaurus.io/), a popular framework. Please see the README there to get started.
+User-facing docs live in [`docs/guide/`](docs/guide/). Design notes and ADRs live in [`docs/`](docs/).
 
 <!-- TODO
 ## Styleguides

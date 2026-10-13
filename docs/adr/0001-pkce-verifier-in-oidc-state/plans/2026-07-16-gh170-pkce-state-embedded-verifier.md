@@ -29,7 +29,7 @@
 | `src/cookie.go` | Remove or stop using `getCodeVerifierCookieName` if unused |
 | `src/oidc/state_test.go` | Encode/decode round-trip including encrypted verifier field |
 | `src/oidc_test.go` or `src/pkce_test.go` | Token exchange uses state verifier; missing verifier fails closed |
-| `website/docs/...` | Only if public docs mention CodeVerifier cookie (likely none) |
+| `docs/guide/...` | Only if public docs mention CodeVerifier cookie (likely none) |
 
 ---
 
@@ -382,7 +382,7 @@ EOF
 ### Task 4: Size / compatibility sanity + manual verification notes
 
 **Files:**
-- Optionally modify: `website/docs/getting-started/middleware-configuration.md` only if it documents CodeVerifier cookies (skip if silent).
+- Optionally modify: `docs/guide/getting-started/middleware-configuration.md` only if it documents CodeVerifier cookies (skip if silent).
 - No code unless URL length check fails.
 
 - [ ] **Step 1: Assert state URL length stays reasonable**

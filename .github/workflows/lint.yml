@@ -1,8 +1,4 @@
 name: Lint
-# Deliberately NO paths filter. testing.yaml and e2e-tests.yml both skip
-# website/** changes, so this workflow is the only required check a
-# website-only PR runs - which is exactly why the website job below builds the
-# site and does not just lint it. Do not narrow these triggers to Go paths.
 on:
   push:
     branches: [main]
@@ -74,44 +70,6 @@ jobs:
       - name: govulncheck (gatepost-extauthz)
         working-directory: ./cmd/gatepost-extauthz
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
-
-  website:
-    name: Website (Biome)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: ./website
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          # Pinned: `latest` silently moves under us, and a bun minor bump can
-          # change lint output and Playwright behaviour between two runs of the
-          # same commit. 1.4.2 is the bun release this repo is developed against.
-          bun-version: 1.4.2
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Lint
-        run: bun run lint
-
-      # Not optional polish: website/docusaurus.config.ts sets
-      # onBrokenLinks: 'throw', so a single bad relative link (or a broken MDX
-      # import) fails the entire production build. Nothing else in CI built the
-      # site, which is how a broken-link regression reached this branch with the
-      # whole pipeline green. Runs after the Biome lint so cheap feedback comes
-      # first; no extra setup needed because the bun toolchain and the frozen
-      # lockfile install are already above.
-      - name: Build
-        run: bun run build
 
   e2e:
     name: E2E (Biome)

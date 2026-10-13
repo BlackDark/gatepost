@@ -29,12 +29,6 @@ tasks:
     cmds:
       - docker compose up
 
-  run:website:
-    desc: 'Start the website in development mode'
-    dir: 'website'
-    cmds:
-      - npm start
-
   build:extauthz:
     desc: 'Build the standalone ext-authz server binary'
     dir: 'cmd/gatepost-extauthz'
@@ -76,7 +70,6 @@ tasks:
     deps:
       - lint:go
       - lint:sec
-      - lint:website
       - lint:e2e
   lint:go:
     desc: 'Lint and check Go formatting'
@@ -100,11 +93,6 @@ tasks:
     dir: 'cmd/gatepost-extauthz'
     cmds:
       - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
-  lint:website:
-    desc: 'Lint website with Biome'
-    dir: 'website'
-    cmds:
-      - bun run lint
   lint:e2e:
     desc: 'Lint e2e with Biome'
     dir: 'e2e'
@@ -115,7 +103,6 @@ tasks:
     desc: 'Format all code'
     deps:
       - fmt:go
-      - fmt:website
       - fmt:e2e
   fmt:go:
     desc: 'Format Go code'
@@ -127,11 +114,6 @@ tasks:
     dir: 'cmd/gatepost-extauthz'
     cmds:
       - golangci-lint run --fix ./...
-  fmt:website:
-    desc: 'Format website with Biome'
-    dir: 'website'
-    cmds:
-      - bun run lint:fix
   fmt:e2e:
     desc: 'Format e2e with Biome'
     dir: 'e2e'

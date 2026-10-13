@@ -36,21 +36,21 @@ experimental:
 
 Dynamic configuration uses that same name as the plugin key (`plugin.gatepost`). The Go type is `src.Gatepost`. The catalog import path is `github.com/BlackDark/gatepost/src`.
 
-Config reference and usage live in [`website/docs/`](website/docs/). Start with [getting started](website/docs/getting-started/index.md) and the [middleware configuration](website/docs/getting-started/middleware-configuration.md). Design notes are in [`docs/adr/`](docs/adr/).
+Config reference and usage live in [`docs/guide/`](docs/guide/). Start with [getting started](docs/guide/getting-started/index.md) and the [middleware configuration](docs/guide/getting-started/middleware-configuration.md). Design notes are in [`docs/adr/`](docs/adr/).
 
 ### Tested providers
 
 | Provider | Status | Notes |
 |---|---|---|
-| [ZITADEL](website/docs/identity-providers/zitadel.md) | ✅ | |
-| [Kanidm](website/docs/identity-providers/kanidm.md) | ✅ | |
-| [Keycloak](website/docs/identity-providers/keycloak.md) | ✅ | |
-| [Microsoft Entra ID](website/docs/identity-providers/entra-id.md) | ✅ | |
+| [ZITADEL](docs/guide/identity-providers/zitadel.md) | ✅ | |
+| [Kanidm](docs/guide/identity-providers/kanidm.md) | ✅ | |
+| [Keycloak](docs/guide/identity-providers/keycloak.md) | ✅ | |
+| [Microsoft Entra ID](docs/guide/identity-providers/entra-id.md) | ✅ | |
 | [HashiCorp Vault](https://www.vaultproject.io/) | ❌ | Not supported. |
-| [Authentik](website/docs/identity-providers/authentik.md) | ✅ | |
-| [Pocket ID](website/docs/identity-providers/pocket-id.md) | ✅ | |
+| [Authentik](docs/guide/identity-providers/authentik.md) | ✅ | |
+| [Pocket ID](docs/guide/identity-providers/pocket-id.md) | ✅ | |
 | [GitHub](https://github.com) | ❌ | GitHub doesn't seem to support OIDC, only plain OAuth. |
-| [Logto](website/docs/identity-providers/logto.md) | ✅ | |
+| [Logto](docs/guide/identity-providers/logto.md) | ✅ | |
 
 ### Behaviour
 
@@ -153,13 +153,13 @@ Names before the rename:
 
 The wildcard opt-in env var is still `TOA_ENABLE_REDIRECT_URI_WILDCARDS`.
 
-The original plugin's docs site, [traefik-oidc-auth.sevensolutions.cc](https://traefik-oidc-auth.sevensolutions.cc/), describes that project. Use [`website/docs/`](website/docs/) for Gatepost.
+The original plugin's docs site, [traefik-oidc-auth.sevensolutions.cc](https://traefik-oidc-auth.sevensolutions.cc/), describes that project. Use [`docs/guide/`](docs/guide/) for Gatepost.
 
 Provider notes that still live on the original tracker:
 
 - Kanidm: [sevensolutions/traefik-oidc-auth#12](https://github.com/sevensolutions/traefik-oidc-auth/issues/12)
 - HashiCorp Vault: [sevensolutions/traefik-oidc-auth#13](https://github.com/sevensolutions/traefik-oidc-auth/issues/13)
 
-If this is useful, consider supporting the original author:
+If this is useful, consider supporting the project:
 
-[![](https://img.shields.io/static/v1?label=Sponsor&color=blue&message=%E2%9D%A4&logo=GitHub)](https://github.com/sponsors/sevensolutions)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/blackdark93)
