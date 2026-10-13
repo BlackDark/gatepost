@@ -94,17 +94,13 @@ See [`docs/gatepost-extauthz.md`](docs/gatepost-extauthz.md) for:
 
 ## Local development
 
-This project uses a [Taskfile](https://taskfile.dev/). Install the Task CLI from the [official documentation](https://taskfile.dev/installation/). Docker is required for the compose workspaces.
-
-```
-task --list
-```
+Docker is required for the compose workspaces under `workspaces/`.
 
 ### Traefik middleware
 
 Keycloak is the preconfigured local IdP:
 
-1. Run `task run:keycloak` and wait until the stack is up.
+1. `docker compose -f workspaces/keycloak/docker-compose.yml up` and wait until the stack is up.
 2. Open `http://localhost:9080`.
 3. Log in at Keycloak as `admin` / `admin`.
 
@@ -119,12 +115,12 @@ VALIDATE_AUDIENCE=true
 
 Then:
 
-1. Run `task run:external`.
+1. `docker compose -f workspaces/external-idp/docker-compose.yml up`
 2. Open `http://localhost:9080`.
 
 Plugin config for these stacks is `workspaces/configs/http.yml`. File changes reload automatically.
 
-Other bundled IdPs: `task run:zitadel`, `task run:pocketid`, `task run:logto`.
+Other bundled IdPs: `workspaces/zitadel`, `workspaces/pocket-id`, `workspaces/logto` (same `docker compose -f …/docker-compose.yml up` pattern).
 
 ### Standalone ext_authz service
 
@@ -134,8 +130,8 @@ CONFIG_FILE=./config.yaml LISTEN_ADDR=:9002 GRPC_LISTEN_ADDR=:9003 go run ./cmd/
 
 `GRPC_LISTEN_ADDR` is optional; unset, the gRPC listener does not start. See [`docs/gatepost-extauthz.md`](docs/gatepost-extauthz.md) for the config format, `TRUSTED_PROXIES`, and gateway wiring.
 
-```
-task test:extauthz
+```sh
+cd cmd/gatepost-extauthz && go test -count=1 -race ./...
 ```
 
 ## Background

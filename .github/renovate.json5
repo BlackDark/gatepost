@@ -3,7 +3,7 @@
   extends: ["github>blackdark/renovate-base//default.json5", ":pinVersions"],
   postUpdateOptions: ["gomodTidy"],
   automergeType: "pr",
-  // Refreshed by `task vendor`, which Renovate cannot run.
+  // vendor/ is refreshed locally; Renovate cannot run that step.
   ignorePaths: ["**/node_modules/**", "**/vendor/**"],
   packageRules: [
     // The base groups by npm depType, which Go modules do not have.
