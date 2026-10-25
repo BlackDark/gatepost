@@ -20,14 +20,14 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     permissions:
       contents: read
-    uses: ./.github/workflows/lint.yml
+    uses: $/.github/workflows/lint.yml
 
   testing:
     name: testing
     if: ${{ !github.event.pull_request.draft }}
     permissions:
       contents: read
-    uses: ./.github/workflows/testing.yaml
+    uses: $/.github/workflows/testing.yaml
 
   check:
     name: check
