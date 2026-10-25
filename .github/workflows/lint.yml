@@ -62,7 +62,7 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./src/...
 
-      # Same toolchain as the root module (both go.mod files pin 1.26.9). A
+      # Same toolchain as the root module (both go.mod files pin 1.26.10). A
       # second job only repeated checkout and setup-go.
       - name: govulncheck (gatepost-extauthz)
         working-directory: ./cmd/gatepost-extauthz
