@@ -1,6 +1,6 @@
 module github.com/BlackDark/gatepost/cmd/gatepost-extauthz
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/BlackDark/gatepost v0.21.1

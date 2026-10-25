@@ -1,11 +1,6 @@
 name: Run Go tests
 on:
-  push:
-    branches: [ main ]
-  # No paths-ignore for docs/: src/config_dockeys_test.go walks docs/guide/** and
-  # must run when Traefik-facing docs change.
-  pull_request:
-    branches: [ main ]
+  workflow_call:
 
 permissions: {}
 

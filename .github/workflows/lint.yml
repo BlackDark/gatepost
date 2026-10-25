@@ -1,9 +1,6 @@
 name: Lint
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
 
 permissions: {}
 
@@ -65,7 +62,7 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./src/...
 
-      # Same toolchain as the root module (both go.mod files pin 1.26.9). A
+      # Same toolchain as the root module (both go.mod files pin 1.26.10). A
       # second job only repeated checkout and setup-go.
       - name: govulncheck (gatepost-extauthz)
         working-directory: ./cmd/gatepost-extauthz
@@ -116,10 +113,19 @@ jobs:
           go-version-file: go.mod
 
       # Installed from a pinned module version rather than a floating action
-      # reference: actionlint has no first-party action, and a moving tag would
-      # make lint findings depend on when the job ran.
+      # rhysd/actionlint#732 adds `$/` self-repository uses: support; not in a
+      # release yet (latest v1.7.12 rejects `$/`). Install that PR tip until
+      # upstream cuts a release that includes it.
       - name: Install actionlint
-        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch self-repository-uses-syntax \
+            https://github.com/ArloL/actionlint.git /tmp/actionlint
+          cd /tmp/actionlint
+          # pin: ArloL/actionlint@b02c24b (rhysd/actionlint#732)
+          git fetch --depth 1 origin b02c24b743cc88a26b280339814eb4ece91c32cb
+          git checkout b02c24b743cc88a26b280339814eb4ece91c32cb
+          go install ./cmd/actionlint
 
       # actionlint shells out to shellcheck and pyflakes when they are on PATH;
       # GitHub runners have neither, so without this the run: blocks are only
