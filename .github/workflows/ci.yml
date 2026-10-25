@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: lint
+    if: ${{ !github.event.pull_request.draft }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lint.yml
+
+  testing:
+    name: testing
+    if: ${{ !github.event.pull_request.draft }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/testing.yaml
+
+  check:
+    name: check
+    if: always()
+    needs: [lint, testing]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Aggregate
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
