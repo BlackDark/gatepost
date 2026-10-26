@@ -88,7 +88,7 @@ jobs:
           # Pinned: `latest` silently moves under us, and a bun minor bump can
           # change lint output and Playwright behaviour between two runs of the
           # same commit. 1.4.2 is the bun release this repo is developed against.
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
