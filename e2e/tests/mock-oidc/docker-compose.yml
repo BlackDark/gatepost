@@ -1,6 +1,6 @@
 services:
   mock-oauth2-server:
-    image: ghcr.io/navikt/mock-oauth2-server:6.0.7@sha256:f67032396f2ee4320d09389a174ef04112c754e49ce26f060050a66c1c07aedb
+    image: ghcr.io/navikt/mock-oauth2-server:6.1.3@sha256:2a813381bf282da46ff36ff386059e7903e25865056af8149f4fb3f1441916b8
     ports:
       - "8000:8080"
     volumes:
