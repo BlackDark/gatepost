@@ -3,7 +3,7 @@ services:
     depends_on:
       logto_postgres:
         condition: service_healthy
-    image: svhd/logto:latest@sha256:847cdd2759ad60f61b9733af0ea352183c805681dff5c9f8140a80f52d8e1340
+    image: svhd/logto:latest@sha256:097cd47689546461edb4637fb6eee60b9ab6d3d4c08ebb20bc44a1b1809b82c0
     entrypoint: ["sh", "-c", "npm run cli db seed -- --swe && npm start"]
     ports:
       - 3001:3001
