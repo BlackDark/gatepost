@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Operator-configured header names (`headers[].name`) and `_` spellings of the
+  well-known identity headers (any mix of `-` and `_`, such as `X_Forwarded_User`) are now stripped from client
+  requests on every path. Before, only the fixed well-known list was stripped, so a
+  client-supplied copy of a configured header reached the backend on bypass-rule
+  and `Forward` paths, and whenever its `includeWhen` gate was closed. Headers
+  are still set from the verified session on the authenticated path.
 - A `bypassAuthenticationRule` match on a path that contains a `..` segment,
   also percent-encoded (`..%2Fadmin`, `%2e%2e%2f`, double-encoded forms) or with
   a backslash separator, no longer skips authentication. The rule matched the
