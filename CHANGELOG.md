@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller. Reproduced with Traefik v3.6 and nginx: `/api/..%2Fadmin` returned the
   protected page under a `PathPrefix(`/api/`)` bypass rule. Traefik itself already
   cleans plain `..` and `%2e%2e`; encoded slashes reached the plugin.
+- `gatepost-extauthz` gRPC mode now returns every request header Gatepost deleted
+  in `OkHttpResponse.headers_to_remove`, and headers Gatepost changed or added
+  overwrite the client's value instead of being appended to it. Before, a
+  gateway that overlays only the returned headers kept the client's copy.
+  HTTP mode cannot express removal; see `docs/gatepost-extauthz.md`.
 - Updated the Go toolchain floor to 1.26.8 in both modules. Go 1.26.5 carried
   five published standard library vulnerabilities (including `encoding/asn1`
   recursion depth and `net/http` Punycode label handling) reachable from this
