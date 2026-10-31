@@ -20,7 +20,7 @@ services:
   # Presents the throwaway CA-signed leaf from ./gencerts.sh. This is the
   # certificate provider.cABundle has to trust.
   tls-proxy:
-    image: nginx:1.31.8-alpine@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60
+    image: nginx:1.31.8-alpine@sha256:785835ea65db4bba6f021acc0f3be91b0fef76a53fe41f8588c6698d2aed0606
     ports:
       - "8443:8443"
     volumes:
@@ -49,7 +49,7 @@ services:
       start_period: 3s
 
   traefik:
-    image: traefik:v3.7.16@sha256:c8a121e4bb1347e8fd52657fab12f2cb70b68f8a018895e2068f92c9e519b9c2
+    image: traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65
     # Deliberately different from the mock-oidc stack's 9080/9443/8080 so the
     # two suites can be up at the same time on one runner.
     ports:
