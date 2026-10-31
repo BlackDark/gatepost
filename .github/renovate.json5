@@ -13,5 +13,22 @@
       groupName: "go modules (non-major)",
       groupSlug: "go-modules-non-major",
     },
+    {
+      // Product ceiling = Traefik's build Go for the e2e image, not Yaegi's
+      // older language ceiling. e2e pins traefik:v3.7.16 → go 1.26.0 in
+      // Traefik's go.mod; root go.mod is the plugin/CI pin (go-version-file).
+      // Raise to "<1.28.0" when e2e moves to a Traefik that builds with 1.27
+      // (v3.7.17 already does). Do not extend renovate-base//go.json5 without
+      // this cap — that preset bumps the go directive unbounded.
+      description: "Cap Go at Traefik e2e line (traefik:v3.7.16 → go 1.26.x)",
+      matchManagers: ["gomod"],
+      matchDepNames: ["go", "toolchain"],
+      allowedVersions: "<1.27.0",
+    },
+    {
+      description: "Cap golang Docker images at Traefik e2e Go line (1.26.x)",
+      matchPackageNames: ["golang", "docker.io/library/golang", "/^golang$/"],
+      allowedVersions: "/^1\\.26([.-]|$)/",
+    },
   ],
 }

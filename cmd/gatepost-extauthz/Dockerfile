@@ -1,7 +1,9 @@
 # Pinned by digest (multi-arch index, verified against the registry): a moving
 # `golang:1.26-alpine` tag lets anyone who pushes that tag change the toolchain
 # - and therefore the shipped binary - without a commit in this repo.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
+# Stay on the Traefik e2e Go line (traefik:v3.7.16 → go 1.26); Renovate is
+# capped in .github/renovate.json5. Bump with that cap when e2e Traefik moves.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
 WORKDIR /repo
 COPY . .
 WORKDIR /repo/cmd/gatepost-extauthz
