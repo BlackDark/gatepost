@@ -3,7 +3,7 @@ services:
     depends_on:
       logto_postgres:
         condition: service_healthy
-    image: svhd/logto:latest@sha256:097cd47689546461edb4637fb6eee60b9ab6d3d4c08ebb20bc44a1b1809b82c0
+    image: svhd/logto:latest@sha256:9a9aff9423ab7863f00c881c31408e0bfe4def730bac2182d0097367002f5854
     entrypoint: ["sh", "-c", "npm run cli db seed -- --swe && npm start"]
     ports:
       - 3001:3001
@@ -14,7 +14,7 @@ services:
       - ENDPOINT
       - ADMIN_ENDPOINT
   logto_postgres:
-    image: postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
     user: postgres
     environment:
       POSTGRES_USER: postgres
@@ -28,7 +28,7 @@ services:
       retries: 5
 
   traefik:
-    image: "traefik:v3.7.16@sha256:c8a121e4bb1347e8fd52657fab12f2cb70b68f8a018895e2068f92c9e519b9c2"
+    image: "traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65"
     ports:
       - "9080:80"
       - "8080:8080"
