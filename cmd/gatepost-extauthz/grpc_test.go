@@ -227,3 +227,51 @@ func TestRecoveryInterceptor_ConvertsPanicToError(t *testing.T) {
 		t.Fatal("expected error after recovering panic, got nil")
 	}
 }
+
+func TestCheck_OkResponseIsADiffAgainstTheOriginalRequest(t *testing.T) {
+	// Behaves like Gatepost in front of the echo handler: strips an identity
+	// header and an alias spelling, sets the verified identity, echoes the rest.
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del("X-Forwarded-Email")
+		delete(r.Header, "X_forwarded_user")
+		r.Header.Set("X-Forwarded-User", "verified")
+		for name, values := range r.Header {
+			for _, v := range values {
+				w.Header().Add(name, v)
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := &grpcAuthServer{next: next}
+
+	resp, err := srv.Check(context.Background(), newCheckRequest("GET", "https", "app.example.com", "/", map[string]string{
+		"x-forwarded-user":  "attacker",
+		"x-forwarded-email": "attacker@example.com",
+		"x_forwarded_user":  "attacker",
+		"x-keep":            "unchanged",
+	}))
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	ok, isOk := resp.GetHttpResponse().(*authv3.CheckResponse_OkResponse)
+	if !isOk {
+		t.Fatalf("expected OkResponse, got %T", resp.GetHttpResponse())
+	}
+
+	remove := ok.OkResponse.GetHeadersToRemove()
+	if len(remove) != 2 || remove[0] != "X-Forwarded-Email" || remove[1] != "X_forwarded_user" {
+		t.Errorf("headers_to_remove=%v, want [X-Forwarded-Email X_forwarded_user]", remove)
+	}
+
+	set := ok.OkResponse.GetHeaders()
+	if len(set) != 1 {
+		t.Fatalf("headers=%+v, want exactly the changed X-Forwarded-User", set)
+	}
+	h := set[0]
+	if h.GetHeader().GetKey() != "X-Forwarded-User" || h.GetHeader().GetValue() != "verified" {
+		t.Errorf("header=%+v", h)
+	}
+	if h.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+		t.Errorf("append action=%v, want OVERWRITE_IF_EXISTS_OR_ADD so the client value is replaced", h.GetAppendAction())
+	}
+}

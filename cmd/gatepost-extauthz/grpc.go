@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,6 +50,10 @@ func (s *grpcAuthServer) Check(ctx context.Context, req *authv3.CheckRequest) (*
 		}, nil
 	}
 
+	// The handler mutates httpReq.Header; keep the request as the gateway sent it
+	// so the verdict can be expressed as a difference against it.
+	original := httpReq.Header.Clone()
+
 	rec := httptest.NewRecorder()
 	s.next.ServeHTTP(rec, httpReq)
 	result := rec.Result()
@@ -59,7 +64,8 @@ func (s *grpcAuthServer) Check(ctx context.Context, req *authv3.CheckRequest) (*
 			Status: &status.Status{Code: int32(codes.OK)},
 			HttpResponse: &authv3.CheckResponse_OkResponse{
 				OkResponse: &authv3.OkHttpResponse{
-					Headers: headerValueOptions(result.Header),
+					Headers:         okHeaderValueOptions(original, result.Header),
+					HeadersToRemove: removedHeaders(original, result.Header),
 				},
 			},
 		}, nil
@@ -131,6 +137,49 @@ func headerValueOptions(h http.Header) []*corev3.HeaderValueOption {
 			})
 		}
 	}
+	return out
+}
+
+// okHeaderValueOptions turns the handler's response headers into the request
+// mutations for the gateway. The terminal handler echoes every request header
+// it kept, so a header equal to the original needs no mutation. A header
+// Gatepost changed or added overwrites any client-supplied value instead of
+// being appended to it: with append, a client-sent X-Forwarded-User would stay
+// next to the verified one.
+func okHeaderValueOptions(original, result http.Header) []*corev3.HeaderValueOption {
+	var out []*corev3.HeaderValueOption
+	for name, values := range result {
+		if slices.Equal(original.Values(name), values) {
+			continue
+		}
+		for i, v := range values {
+			action := corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD
+			if i == 0 {
+				action = corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD
+			}
+			out = append(out, &corev3.HeaderValueOption{
+				Header:       &corev3.HeaderValue{Key: name, Value: v},
+				AppendAction: action,
+			})
+		}
+	}
+	return out
+}
+
+// removedHeaders lists the request headers Gatepost deleted. It strips
+// client-supplied identity headers (including configured names and their
+// '-'/'_' spellings) and its own cookies from a private copy of the request,
+// and the terminal handler echoes whatever remains, so a deleted header is
+// simply absent from the verdict. A gateway that overlays only returned headers
+// would keep the client's value unless it is told to remove it.
+func removedHeaders(original, result http.Header) []string {
+	var out []string
+	for name := range original {
+		if _, kept := result[name]; !kept {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
 	return out
 }
 
