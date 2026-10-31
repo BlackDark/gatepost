@@ -1,30 +1,52 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["github>blackdark/renovate-base//default.json5", ":pinVersions"],
+  extends: [
+    "github>blackdark/renovate-base//default.json5",
+    // Bumps go.mod's go directive and groups mise+gomod go. The golang Docker
+    // image grouping from go.json5 is undone below — extauthz builder is
+    // independent of the Yaegi plugin pin.
+    "github>blackdark/renovate-base//go.json5",
+    ":pinVersions",
+  ],
   postUpdateOptions: ["gomodTidy"],
   automergeType: "pr",
   // vendor/ is refreshed locally; Renovate cannot run that step.
   ignorePaths: ["**/node_modules/**", "**/vendor/**"],
   packageRules: [
-    // The base groups by npm depType, which Go modules do not have.
+    // The base groups by npm depType, which Go modules do not have. Exclude
+    // go/toolchain so go.json5's "go toolchain" group wins for those.
     {
       matchManagers: ["gomod", "golang-version"],
       matchUpdateTypes: ["minor", "patch", "pin"],
+      matchDepNames: ["!go", "!toolchain"],
       groupName: "go modules (non-major)",
       groupSlug: "go-modules-non-major",
     },
     {
       // Plugin module only. e2e pins traefik:v3.7.16 → Traefik go.mod is
-      // go 1.26.0. Cap the plugin go/toolchain directive there. The extauthz
-      // Dockerfile golang: image is a compiled binary and may move freely —
-      // do not matchPackageNames golang here. Raise when e2e Traefik moves
-      // (v3.7.17 builds with go 1.27).
+      // go 1.26.0. Raise when e2e Traefik moves (v3.7.17 builds with go 1.27).
+      // rangeStrategy bump comes from go.json5.
       description: "Cap plugin go.mod to Traefik e2e Go line (1.26.x)",
       matchManagers: ["gomod"],
       matchDepNames: ["go", "toolchain"],
       matchDepTypes: ["golang", "toolchain"],
-      rangeStrategy: "bump",
       allowedVersions: "<1.27.0",
+    },
+    {
+      // Undo go.json5's "go toolchain" grouping for golang images so the
+      // extauthz Dockerfile tracks docker patch/minor groups independently.
+      description: "Keep golang Docker images with other docker patch updates",
+      matchPackageNames: ["golang", "docker.io/library/golang", "/^golang$/"],
+      matchUpdateTypes: ["patch", "pin", "digest"],
+      groupName: "all docker patch updates",
+      groupSlug: "all-docker-patch",
+    },
+    {
+      description: "Keep golang Docker images with other docker minor updates",
+      matchPackageNames: ["golang", "docker.io/library/golang", "/^golang$/"],
+      matchUpdateTypes: ["minor"],
+      groupName: "all docker minor updates",
+      groupSlug: "all-docker-minor",
     },
   ],
 }
