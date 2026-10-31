@@ -543,10 +543,42 @@ func (toa *Gatepost) sanitizeForUpstream(req *http.Request) {
 	}
 
 	// Remove client-supplied identity headers. They are attacker-controlled and
-	// must never reach a backend that trusts them, on any path.
-	for _, header := range clientIdentityHeaders {
-		req.Header.Del(header)
+	// must never reach a backend that trusts them, on any path. The operator's
+	// configured header names are identity headers by definition: attachHeaders
+	// skips a header whose includeWhen gate is closed (and the forward paths
+	// attach none), which would otherwise leave the client's copy in place. On
+	// the authenticated path attachHeaders re-sets them afterwards.
+	//
+	// Names are compared with '-' and '_' treated alike, in any mix: backends
+	// that map headers to CGI/WSGI-style variables cannot tell X-Forwarded-User,
+	// X_Forwarded_User and X-Forwarded_User apart.
+	configured := make(map[string]struct{}, len(toa.Config.Headers))
+	for index := range toa.Config.Headers {
+		configured[normalizeHeaderName(toa.Config.Headers[index].Name)] = struct{}{}
 	}
+
+	for name := range req.Header {
+		key := normalizeHeaderName(name)
+		_, isWellKnown := wellKnownIdentityHeaders[key]
+		_, isConfigured := configured[key]
+		if isWellKnown || isConfigured {
+			delete(req.Header, name)
+		}
+	}
+}
+
+// wellKnownIdentityHeaders is clientIdentityHeaders in normalized form.
+var wellKnownIdentityHeaders = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(clientIdentityHeaders))
+	for _, name := range clientIdentityHeaders {
+		out[normalizeHeaderName(name)] = struct{}{}
+	}
+	return out
+}()
+
+// normalizeHeaderName folds case and treats '-' and '_' as the same character.
+func normalizeHeaderName(name string) string {
+	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 }
 
 // hasDotSegments reports whether a request path contains a ".." segment, also
