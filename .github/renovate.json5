@@ -13,5 +13,18 @@
       groupName: "go modules (non-major)",
       groupSlug: "go-modules-non-major",
     },
+    {
+      // Plugin module only. e2e pins traefik:v3.7.16 → Traefik go.mod is
+      // go 1.26.0. Cap the plugin go/toolchain directive there. The extauthz
+      // Dockerfile golang: image is a compiled binary and may move freely —
+      // do not matchPackageNames golang here. Raise when e2e Traefik moves
+      // (v3.7.17 builds with go 1.27).
+      description: "Cap plugin go.mod to Traefik e2e Go line (1.26.x)",
+      matchManagers: ["gomod"],
+      matchDepNames: ["go", "toolchain"],
+      matchDepTypes: ["golang", "toolchain"],
+      rangeStrategy: "bump",
+      allowedVersions: "<1.27.0",
+    },
   ],
 }

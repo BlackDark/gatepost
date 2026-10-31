@@ -35,7 +35,14 @@ services:
       # healthy. What matters here is that the TLS listener answers - whether the
       # plugin trusts the certificate is what the tests are about.
       test:
-        ["CMD", "wget", "--no-check-certificate", "--spider", "-q", "https://127.0.0.1:8443/isalive"]
+        [
+          "CMD",
+          "wget",
+          "--no-check-certificate",
+          "--spider",
+          "-q",
+          "https://127.0.0.1:8443/isalive",
+        ]
       interval: 2s
       timeout: 2s
       retries: 15
