@@ -1,19 +1,21 @@
 # E2E Tests
 
-End to end tests are executed by using [*Microsoft Playwright*](https://playwright.dev/).
-The test infrastructure is set up by [*docker compose*](https://docs.docker.com/compose/).
+End to end tests are executed by using [_Microsoft Playwright_](https://playwright.dev/).
+The test infrastructure is set up by [_docker compose_](https://docs.docker.com/compose/).
 
-Test files are located in the *./tests*-folder within subfolders for different configurations or IDPs.
+Test files are located in the _./tests_-folder within subfolders for different configurations or IDPs.
 
-We're using *bun* which can be installed by following the [official instructions](https://bun.com/docs/installation).
+We're using _bun_ which can be installed by following the [official instructions](https://bun.com/docs/installation).
 
 ## First-time setup
+
 ```
 bun install
 bunx playwright install
 ```
 
 ## How to run the tests
+
 ```
 bunx playwright test
 ```
@@ -60,13 +62,13 @@ plugin trust an IdP whose certificate is signed by a CA that is in nobody's syst
 store. Nine cases, T1–T9:
 
 - **T1/T2** — the correct bundle, as a file and as inline base64, must complete a real
-  login. T2 asserts *equivalence* with T1 (same final status **and** the same authorize
+  login. T2 asserts _equivalence_ with T1 (same final status **and** the same authorize
   redirect target), not merely that it worked.
 - **T3** — no bundle at all must fail with `x509: certificate signed by unknown
   authority`. This is what gives T1 meaning: without it, T1 could pass because the mock
   was reachable rather than because the bundle was honoured.
-- **T4/T5/T6** — a valid but *wrong* CA, an *empty* `cABundleFile`, and a bundle file of
-  *garbage* PEM. Each is distinguished from T3 by a log line: `Loaded CA bundle` proves
+- **T4/T5/T6** — a valid but _wrong_ CA, an _empty_ `cABundleFile`, and a bundle file of
+  _garbage_ PEM. Each is distinguished from T3 by a log line: `Loaded CA bundle` proves
   the file was read and applied (wrong CA), `Failed to append CA bundle` proves it was
   read but unparseable (garbage).
 - **T7/T8/T9** — config errors that make the plugin's `New()` fail: invalid base64
@@ -102,8 +104,8 @@ behaviours work:
 - **A provider that rejects a bad `client_secret`.** mock-oauth2-server does not check
   `client_secret` at all, so nothing in e2e proves the plugin sends the configured secret
   correctly or that a wrong one is rejected.
-- **A provider that requires a PKCE verifier.** A *missing* verifier is silently accepted
-  by the mock; only a *wrong* one is rejected. There is a positive PKCE test in the
+- **A provider that requires a PKCE verifier.** A _missing_ verifier is silently accepted
+  by the mock; only a _wrong_ one is rejected. There is a positive PKCE test in the
   `mock-oidc` project that proves the plugin's S256 round trip works against a real OIDC
   implementation — but it does **not** prove a provider would reject a PKCE downgrade.
 - **A provider that validates `redirect_uri`,** emits a `sid` claim for front-channel

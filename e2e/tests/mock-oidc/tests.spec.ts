@@ -223,7 +223,7 @@ ${whoamiRouter()}
   expect(await page.locator('text=Authorization: Bearer: ey').isVisible()).toBeTruthy();
   expect(await page.locator('text=X-Static-Header: 42').isVisible()).toBeTruthy();
 
-  const pageText = await page.innerText('html');
+  const pageText = await page.textContent('html');
   expect(pageText).not.toMatch(/Cookie:\s*(?:^|\s|;)\s*Authorization\s*=\s*[^;\r\n]+/);
 });
 
