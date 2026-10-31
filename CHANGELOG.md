@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A `bypassAuthenticationRule` match on a path that contains a `..` segment,
+  also percent-encoded (`..%2Fadmin`, `%2e%2e%2f`, double-encoded forms) or with
+  a backslash separator, no longer skips authentication. The rule matched the
+  uncleaned path while the request was forwarded as sent, so a backend that
+  normalizes it (nginx does) could serve a protected path to an unauthenticated
+  caller. Reproduced with Traefik v3.6 and nginx: `/api/..%2Fadmin` returned the
+  protected page under a `PathPrefix(`/api/`)` bypass rule. Traefik itself already
+  cleans plain `..` and `%2e%2e`; encoded slashes reached the plugin.
 - Updated the Go toolchain floor to 1.26.8 in both modules. Go 1.26.5 carried
   five published standard library vulnerabilities (including `encoding/asn1`
   recursion depth and `net/http` Punycode label handling) reachable from this

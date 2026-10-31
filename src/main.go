@@ -365,8 +365,14 @@ func (toa *Gatepost) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	isPublic := false
 	if toa.BypassAuthenticationRule != nil {
 		if toa.BypassAuthenticationRule.Match(toa.logger, req) {
-			toa.logger.Log(logging.LevelDebug, "BypassAuthenticationRule matched. Forwarding request without authentication.")
-			isPublic = true
+			if hasDotSegments(req.URL.Path) {
+				// The rule matched the uncleaned path, but the backend may resolve it
+				// to a different, protected path. Fail closed.
+				toa.logger.Log(logging.LevelWarn, "BypassAuthenticationRule matched a path with dot segments. Requiring authentication.")
+			} else {
+				toa.logger.Log(logging.LevelDebug, "BypassAuthenticationRule matched. Forwarding request without authentication.")
+				isPublic = true
+			}
 		} else {
 			toa.logger.Log(logging.LevelDebug, "BypassAuthenticationRule not matched. Requiring authentication.")
 		}
@@ -541,6 +547,29 @@ func (toa *Gatepost) sanitizeForUpstream(req *http.Request) {
 	for _, header := range clientIdentityHeaders {
 		req.Header.Del(header)
 	}
+}
+
+// hasDotSegments reports whether a request path contains a ".." segment, also
+// when it is percent-encoded more than once. Go decodes %2e%2e and %2f in
+// URL.Path but does not clean it, so a path like /public/..%2Fadmin matches a
+// /public prefix while a normalizing backend resolves it to /admin. Backslash
+// counts as a separator because some backends treat it like '/'.
+func hasDotSegments(path string) bool {
+	for depth := 0; depth < 3; depth++ {
+		for _, segment := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
+			if segment == ".." {
+				return true
+			}
+		}
+
+		decoded, err := url.PathUnescape(path)
+		if err != nil || decoded == path {
+			return false
+		}
+		path = decoded
+	}
+
+	return false
 }
 
 // sessionWriteTracker remembers, per session id, when this process last emitted
