@@ -26,6 +26,8 @@ Always on (not configurable off). Optional later: `LoginCsrfMaxAge` if needed; s
 
 Double-redirect hop (`RedirectThenLogin`) does not set CSRF yet; CSRF is set when `redirectToProvider` runs the real IdP redirect (same as PKCE).
 
+That hop runs whenever the callback origin differs from the request origin, including when PKCE is off. Otherwise the host-only cookie is stored on the app host and the callback never receives it.
+
 ## Consequences
 
 - Parallel tabs: cookie name is `LoginCsrf.<csrf>` so each flow keeps its own cookie (avoids shared-cookie races).

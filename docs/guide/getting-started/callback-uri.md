@@ -36,6 +36,8 @@ So an absolute `callbackUri` removes *one* source of mismatch (the outgoing `red
 
 Of course you must pick an absolute URL where the plugin will receive the traffic.
 
+A login started on a different origin first redirects through this URL, so the `LoginCsrf` cookie (which ties the login to the browser) is set on the host that receives the callback. That hop runs whether or not PKCE is enabled.
+
 For users familiar with [thomseddon/traefik-forward-auth](https://github.com/thomseddon/traefik-forward-auth), this is equivalent to its [Auth Host Mode](https://github.com/thomseddon/traefik-forward-auth?tab=readme-ov-file#auth-host-mode).
 
 If you are protecting many different subdomains that share parent domain (for example `example.com`), you might wish to store the cookie at the common level:
