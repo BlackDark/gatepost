@@ -1,7 +1,7 @@
 services:
   zitadel-db:
     restart: unless-stopped
-    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+    image: postgres:18-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395
     volumes:
       - "zitadel_postgres_data:/var/lib/postgresql/data"
     environment:
@@ -60,7 +60,7 @@ services:
       start_period: '20s'
 
   traefik:
-    image: "traefik:v3.7.17@sha256:30ff62491aacdb862ceb8c9edcf2627da638d7deafdd4b6dab32fe34f8aa3e90"
+    image: "traefik:v3.7.17@sha256:f4bb143d1135a579b630ed491e17ec50f6f7c9c6a30585ff3d385471d2a86f5a"
     ports:
       - "9080:80"
       - "8080:8080"
