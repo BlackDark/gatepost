@@ -16,7 +16,7 @@ services:
 
   zitadel:
     restart: unless-stopped
-    image: 'ghcr.io/zitadel/zitadel:v4.20.0@sha256:9ea0e9ecfdc43115da871242e40a0320f2ece864c7cd8b5d41a863a7f4902499'
+    image: 'ghcr.io/zitadel/zitadel:v4.20.2@sha256:d7ffdecfe037940beeae24c8bb32a420b2adc67fab7bc51554bdae58f9624ef3'
     command: 'start-from-init --masterkey "qdUMkPmL6odwLoAXuL5zZ5ujmO294iKo" --tlsMode disabled'
     volumes:
       - ./machinekey:/machinekey
