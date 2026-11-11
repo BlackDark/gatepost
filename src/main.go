@@ -320,10 +320,9 @@ func (toa *Gatepost) isCallbackRequest(req *http.Request) bool {
 		return false
 	}
 
-	if utils.UrlIsAbsolute(toa.CallbackURL) {
-		if toa.requestScheme(req) != toa.CallbackURL.Scheme || toa.requestHost(req) != toa.CallbackURL.Host {
-			return false
-		}
+	if utils.UrlIsAbsolute(toa.CallbackURL) &&
+		!originsMatch(toa.requestScheme(req), toa.requestHost(req), toa.CallbackURL.Scheme, toa.CallbackURL.Host) {
+		return false
 	}
 
 	return true
@@ -1405,16 +1404,118 @@ func (toa *Gatepost) handleLogin(rw http.ResponseWriter, req *http.Request, isCh
 	}
 }
 
+// needsDoubleRedirect reports whether login must bounce through the callback
+// URL before the IdP redirect.
+//
+// The LoginCsrf cookie is host-only and is attached on the hop that redirects
+// to the IdP. A callback on another origin never sees a cookie set on the app
+// host, so that hop has to be the callback origin. This is independent of
+// PKCE: the cookie is required either way (ADR 0003).
 func (toa *Gatepost) needsDoubleRedirect(req *http.Request) bool {
-	if toa.Config.Provider.UsePkceBool {
-		host := toa.fullHost(req)
-		callbackUrl := toa.GetAbsoluteCallbackURL(req).String()
-		if !strings.HasPrefix(callbackUrl, host) {
-			return true
-		}
+	callback := toa.GetAbsoluteCallbackURL(req)
+	if originsMatch(toa.requestScheme(req), toa.requestHost(req), callback.Scheme, callback.Host) {
+		return false
 	}
 
-	return false
+	// The browser was already sent to this callback host and came back with the
+	// bounce state, but the request still does not match the configured origin
+	// (for example TLS is terminated in front of an empty trustedProxies list,
+	// or a proxy appends :443 while the entrypoint is HTTP). Redirecting to
+	// the same host again would loop. A bounce state on a different host must
+	// still be sent to the callback host.
+	if pathMatchesRoute(req.URL.Path, callback.Path) &&
+		hostsLooselyMatch(toa.requestHost(req), callback.Host) &&
+		requestHasBounceState(toa, req) {
+		return false
+	}
+
+	return true
+}
+
+// requestHasBounceState reports whether this request carries a sealed
+// RedirectThenLogin state this process issued. Garbage and other actions
+// return false.
+func requestHasBounceState(toa *Gatepost, req *http.Request) bool {
+	if toa == nil || toa.Config == nil || req == nil || req.URL == nil {
+		return false
+	}
+
+	raw := req.URL.Query().Get("state")
+	if raw == "" {
+		return false
+	}
+
+	state, err := oidc.UnsealState(raw, toa.Config.Secret)
+	if err != nil {
+		return false
+	}
+
+	return state.Action == "RedirectThenLogin"
+}
+
+// originsMatch reports whether two scheme/host pairs are the same origin.
+// Host comparison is case-insensitive, ignores brackets around IPv6, and
+// ignores the scheme's default port. It is not a string prefix, so
+// app.example.com is not app.example.com.evil.test.
+func originsMatch(schemeA, hostA, schemeB, hostB string) bool {
+	if !strings.EqualFold(schemeA, schemeB) {
+		return false
+	}
+
+	return canonicalHost(schemeA, hostA) == canonicalHost(schemeB, hostB)
+}
+
+// hostsLooselyMatch compares hosts while ignoring case, IPv6 brackets, and
+// ports 80 and 443. Scheme is not consulted: a proxy may present the https
+// callback as http with an explicit :443. It does not fold punycode.
+func hostsLooselyMatch(a, b string) bool {
+	return looseHost(a) == looseHost(b)
+}
+
+func looseHost(hostport string) string {
+	host, port := splitHostPortLoose(hostport)
+	host = strings.ToLower(host)
+	if port == "" || port == "80" || port == "443" {
+		return host
+	}
+
+	return host + ":" + port
+}
+
+func canonicalHost(scheme, hostport string) string {
+	host, port := splitHostPortLoose(hostport)
+	host = strings.ToLower(host)
+	if port == "" || port == defaultPort(scheme) {
+		return host
+	}
+
+	return host + ":" + port
+}
+
+func defaultPort(scheme string) string {
+	switch strings.ToLower(scheme) {
+	case "https", "wss":
+		return "443"
+	case "http", "ws":
+		return "80"
+	default:
+		return ""
+	}
+}
+
+// splitHostPortLoose accepts host, host:port, and [ipv6]:port. A value with
+// no port is returned unchanged apart from surrounding IPv6 brackets.
+func splitHostPortLoose(hostport string) (string, string) {
+	hostport = strings.TrimSpace(hostport)
+	if hostport == "" {
+		return "", ""
+	}
+
+	if host, port, err := net.SplitHostPort(hostport); err == nil {
+		return strings.Trim(host, "[]"), port
+	}
+
+	return strings.Trim(hostport, "[]"), ""
 }
 
 // Protocol-critical parameters that AuthorizationParams must not be allowed to override.
@@ -1571,7 +1672,9 @@ func (toa *Gatepost) redirectToProvider(rw http.ResponseWriter, req *http.Reques
 func (toa *Gatepost) doubleRedirectToProvider(rw http.ResponseWriter, req *http.Request, redirectUrl string, isChallenge bool) {
 	toa.logger.Log(logging.LevelDebug, "double-redirect to IdP via callback host=%s returnTo=%s", req.Host, redirectUrl)
 
-	callbackUrl := toa.GetAbsoluteCallbackURL(req)
+	// Copy before writing the query. For an absolute callback,
+	// GetAbsoluteCallbackURL returns the shared CallbackURL pointer.
+	callbackURL := *toa.GetAbsoluteCallbackURL(req)
 
 	state := oidc.OidcState{
 		Action:      "RedirectThenLogin",
@@ -1616,7 +1719,8 @@ func (toa *Gatepost) doubleRedirectToProvider(rw http.ResponseWriter, req *http.
 		urlValues.Add(k, v)
 	}
 
-	callbackUrl.RawQuery = urlValues.Encode()
+	callbackURL.RawQuery = urlValues.Encode()
+	callbackURL.Fragment = ""
 
-	http.Redirect(rw, req, callbackUrl.String(), http.StatusFound)
+	http.Redirect(rw, req, callbackURL.String(), http.StatusFound)
 }

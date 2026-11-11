@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A login whose `callbackUri` is on another origin now bounces through that
+  origin before the identity provider, even when PKCE is off. The host-only
+  `LoginCsrf` cookie was previously set only on that hop when PKCE was on, so
+  an absolute callback without PKCE stored the cookie on the app host and the
+  callback rejected every login. The origin check compares scheme and host
+  (default ports and IPv6 brackets ignored) instead of a string prefix, so
+  `app.example.com.evil.test` is not treated as `app.example.com`. The bounce
+  no longer writes its query onto the shared callback URL, which had been
+  sent to the IdP as `redirect_uri`.
 - Operator-configured header names (`headers[].name`) and `_` spellings of the
   well-known identity headers (any mix of `-` and `_`, such as `X_Forwarded_User`) are now stripped from client
   requests on every path. Before, only the fixed well-known list was stripped, so a
