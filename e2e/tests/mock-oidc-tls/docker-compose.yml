@@ -2,7 +2,7 @@ services:
   # Plain HTTP, exactly as the green mock-oidc project runs it. TLS is terminated
   # by tls-proxy below rather than here - see nginx.conf for why.
   mock-oauth2-server:
-    image: ghcr.io/navikt/mock-oauth2-server:6.1.4@sha256:647dd8c78a54f0e6fcd58d79c884e612f8f998a0662276f3e1db22e464a50192
+    image: ghcr.io/navikt/mock-oauth2-server:6.1.5@sha256:d88e445d55c4ff6eed59b02d86adfece47d985233b1616fb712669b98328c8a2
     volumes:
       - ./config.json:/app/config.json:ro
       - ./login.html:/app/login.html:ro
@@ -20,7 +20,7 @@ services:
   # Presents the throwaway CA-signed leaf from ./gencerts.sh. This is the
   # certificate provider.cABundle has to trust.
   tls-proxy:
-    image: nginx:1.31.8-alpine@sha256:785835ea65db4bba6f021acc0f3be91b0fef76a53fe41f8588c6698d2aed0606
+    image: nginx:1.31.8-alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
     ports:
       - "8443:8443"
     volumes:
@@ -49,7 +49,7 @@ services:
       start_period: 3s
 
   traefik:
-    image: traefik:v3.7.17@sha256:30ff62491aacdb862ceb8c9edcf2627da638d7deafdd4b6dab32fe34f8aa3e90
+    image: traefik:v3.7.17@sha256:f4bb143d1135a579b630ed491e17ec50f6f7c9c6a30585ff3d385471d2a86f5a
     # Deliberately different from the mock-oidc stack's 9080/9443/8080 so the
     # two suites can be up at the same time on one runner.
     ports:
