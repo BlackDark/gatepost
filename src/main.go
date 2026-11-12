@@ -904,6 +904,11 @@ func (toa *Gatepost) handleCallback(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	redirectUrl := state.RedirectUrl
+	if redirectUrl != "" && !toa.allowedCallbackRedirect(req, state.Action, redirectUrl) {
+		toa.logger.Log(logging.LevelWarn, "Rejecting redirect destination from OIDC state")
+		http.Error(rw, "Invalid redirect", http.StatusBadRequest)
+		return
+	}
 
 	switch state.Action {
 	case "Login":
@@ -968,21 +973,10 @@ func (toa *Gatepost) handleCallback(rw http.ResponseWriter, req *http.Request) {
 			clearLegacyCodeVerifierCookies(toa.Config, rw, req, toa.CallbackURL)
 		}
 
-		if redirectUrl != "" {
-			// Only enforce allowlist when configured (same as /login?redirect_uri=...).
-			if len(toa.Config.ValidPostLoginRedirectUris) > 0 {
-				validated, err := utils.ValidateRedirectUri(redirectUrl, toa.Config.ValidPostLoginRedirectUris, toa.RedirectUriWildcardsEnabled)
-				if err != nil {
-					toa.logger.Log(logging.LevelWarn, "Post-login redirect rejected: %s", err.Error())
-					http.Error(rw, "Invalid redirect", http.StatusBadRequest)
-					return
-				}
-				redirectUrl = validated
-			}
-			redirectUrl = toa.ensureAbsoluteUrl(req, redirectUrl)
-		} else {
-			redirectUrl = toa.ensureAbsoluteUrl(req, toa.Config.PostLoginRedirectUri)
+		if redirectUrl == "" {
+			redirectUrl = toa.Config.PostLoginRedirectUri
 		}
+		redirectUrl = toa.ensureAbsoluteUrl(req, redirectUrl)
 
 		if !sess.IsAuthorized {
 			// req is the callback URL — pass original destination for Challenge re-login.
@@ -1451,6 +1445,42 @@ func requestHasBounceState(toa *Gatepost, req *http.Request) bool {
 	}
 
 	return state.Action == "RedirectThenLogin"
+}
+
+// allowedCallbackRedirect checks destinations before callback actions can reuse
+// them. A sealed state authenticates the value, but its origin may have come
+// from a forwarded header on a different request.
+func (toa *Gatepost) allowedCallbackRedirect(req *http.Request, action, destination string) bool {
+	if strings.Contains(destination, "\\") || strings.HasPrefix(destination, "//") {
+		return false
+	}
+	target, err := url.Parse(destination)
+	if err != nil || target.User != nil || target.Opaque != "" {
+		return false
+	}
+	relative := target.Scheme == "" && target.Host == "" && strings.HasPrefix(destination, "/")
+	absolute := (target.Scheme == "https" || target.Scheme == "http") && target.Hostname() != ""
+	if !relative && !absolute {
+		return false
+	}
+
+	configured := toa.Config.PostLoginRedirectUri
+	allowlist := toa.Config.ValidPostLoginRedirectUris
+	if action == "Logout" {
+		configured = toa.Config.PostLogoutRedirectUri
+		allowlist = toa.Config.ValidPostLogoutRedirectUris
+	}
+	if configured != "" && (destination == configured || destination == toa.ensureAbsoluteUrl(req, configured)) {
+		return true
+	}
+
+	// A configured login allowlist also constrains same-origin login returns.
+	if (action != "Login" || len(allowlist) == 0) &&
+		(relative || originsMatch(target.Scheme, target.Host, toa.requestScheme(req), toa.requestHost(req))) {
+		return true
+	}
+	_, err = utils.ValidateRedirectUri(destination, allowlist, toa.RedirectUriWildcardsEnabled)
+	return err == nil
 }
 
 // originsMatch reports whether two scheme/host pairs are the same origin.
