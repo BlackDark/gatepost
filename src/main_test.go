@@ -1852,8 +1852,9 @@ func TestCallbackRedirectPolicy(t *testing.T) {
 		action, destination string
 		allowed             bool
 	}{
-		{"Login", "/home", true},
-		{"Login", "https://auth.example.test:443/home", true},
+		{"RedirectThenLogin", "/home", true},
+		{"RedirectThenLogin", "https://auth.example.test:443/home", true},
+		{"Login", "https://auth.example.test:443/home", false},
 		{"Login", "https://app.example.test/home", true},
 		{"RedirectThenLogin", "https://app.example.test/account", true},
 		{"RedirectThenLogin", "https://other.example.test/home", false},
@@ -1866,6 +1867,27 @@ func TestCallbackRedirectPolicy(t *testing.T) {
 		t.Run(tc.action+"/"+tc.destination, func(t *testing.T) {
 			if got := toa.allowedCallbackRedirect(req, tc.action, tc.destination); got != tc.allowed {
 				t.Fatalf("allowed = %t, want %t", got, tc.allowed)
+			}
+		})
+	}
+}
+
+func TestHandleCallback_AllowsConfiguredDefaultWithAllowlist(t *testing.T) {
+	for _, tc := range []struct {
+		name, configured, destination string
+	}{
+		{"absolute", "https://portal.example.com/home", "https://portal.example.com/home"},
+		{"relative", "/home", "https://app.example.com/home"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCallbackHarness(t, "Introspection")
+			defer h.server.Close()
+			h.toa.Config.PostLoginRedirectUri = tc.configured
+			h.toa.Config.ValidPostLoginRedirectUris = []string{"https://app.example.com/account"}
+
+			rw := h.do(t, &oidc.OidcState{Action: "Login", RedirectUrl: tc.destination})
+			if rw.Code != http.StatusFound || rw.Header().Get("Location") != tc.destination {
+				t.Fatalf("got status %d and location %q, want 302 to %s", rw.Code, rw.Header().Get("Location"), tc.destination)
 			}
 		})
 	}
