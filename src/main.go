@@ -904,6 +904,11 @@ func (toa *Gatepost) handleCallback(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	redirectUrl := state.RedirectUrl
+	if redirectUrl != "" && !toa.allowedCallbackRedirect(req, state.Action, redirectUrl) {
+		toa.logger.Log(logging.LevelWarn, "Rejecting redirect destination from OIDC state")
+		http.Error(rw, "Invalid redirect", http.StatusBadRequest)
+		return
+	}
 
 	switch state.Action {
 	case "Login":
@@ -1451,6 +1456,41 @@ func requestHasBounceState(toa *Gatepost, req *http.Request) bool {
 	}
 
 	return state.Action == "RedirectThenLogin"
+}
+
+// allowedCallbackRedirect checks destinations before callback actions can reuse
+// them. A sealed state authenticates the value, but its origin may have come
+// from a forwarded header on a different request.
+func (toa *Gatepost) allowedCallbackRedirect(req *http.Request, action, destination string) bool {
+	if strings.Contains(destination, "\\") || strings.HasPrefix(destination, "//") {
+		return false
+	}
+	target, err := url.Parse(destination)
+	if err != nil || target.User != nil || target.Opaque != "" {
+		return false
+	}
+	if target.Scheme == "" {
+		return target.Host == "" && strings.HasPrefix(destination, "/")
+	}
+	if (target.Scheme != "https" && target.Scheme != "http") || target.Hostname() == "" {
+		return false
+	}
+
+	if originsMatch(target.Scheme, target.Host, toa.requestScheme(req), toa.requestHost(req)) {
+		return true
+	}
+
+	configured := toa.Config.PostLoginRedirectUri
+	allowlist := toa.Config.ValidPostLoginRedirectUris
+	if action == "Logout" {
+		configured = toa.Config.PostLogoutRedirectUri
+		allowlist = toa.Config.ValidPostLogoutRedirectUris
+	}
+	if destination == configured {
+		return true
+	}
+	_, err = utils.ValidateRedirectUri(destination, allowlist, toa.RedirectUriWildcardsEnabled)
+	return err == nil
 }
 
 // originsMatch reports whether two scheme/host pairs are the same origin.

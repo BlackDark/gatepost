@@ -38,6 +38,8 @@ Of course you must pick an absolute URL where the plugin will receive the traffi
 
 A login started on a different origin first redirects through this URL, so the `LoginCsrf` cookie (which ties the login to the browser) is set on the host that receives the callback. That hop runs whether or not PKCE is enabled.
 
+For cross-origin return destinations, configure a fixed absolute `postLoginRedirectUri` or list the application URLs in `validPostLoginRedirectUris`. For logout returns, use `postLogoutRedirectUri` or `validPostLogoutRedirectUris`. The callback returns HTTP 400 if a return destination falls outside the permitted origins or URLs.
+
 For users familiar with [thomseddon/traefik-forward-auth](https://github.com/thomseddon/traefik-forward-auth), this is equivalent to its [Auth Host Mode](https://github.com/thomseddon/traefik-forward-auth?tab=readme-ov-file#auth-host-mode).
 
 If you are protecting many different subdomains that share parent domain (for example `example.com`), you might wish to store the cookie at the common level:
@@ -82,6 +84,9 @@ http:
             usePkce: false
           scopes: ["openid", "profile", "email"]
           callbackUri: "https://auth.127.0.0.1.sslip.io/oidc/callback"
+          validPostLoginRedirectUris:
+            - "https://service1.127.0.0.1.sslip.io/"
+            - "https://service2.127.0.0.1.sslip.io/"
           sessionCookie:
             domain: ".127.0.0.1.sslip.io"
 

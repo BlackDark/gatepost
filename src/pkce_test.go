@@ -654,6 +654,7 @@ func TestNeedsDoubleRedirect_UsesTrustedForwardedOrigin(t *testing.T) {
 func TestHandleLogin_CrossOriginCallbackSetsCsrfOnCallbackHost(t *testing.T) {
 	toa := newPkceTestAuth(t)
 	toa.Config.Provider.UsePkceBool = false
+	toa.Config.ValidPostLoginRedirectUris = []string{"https://app.example.com/page"}
 	callback, err := url.Parse("https://auth.example.com/oidc/callback")
 	if err != nil {
 		t.Fatal(err)

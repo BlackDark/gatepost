@@ -1840,3 +1840,33 @@ func TestLegacyTicket_GetsDurableCreatedAt(t *testing.T) {
 		t.Fatalf("an aged legacy session must be refused, got %v", err)
 	}
 }
+
+func TestCallbackRedirectPolicy(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://auth.example.test/callback", nil)
+	toa := &Gatepost{Config: &config.Config{
+		PostLoginRedirectUri:        "https://app.example.test/home",
+		ValidPostLoginRedirectUris:  []string{"https://app.example.test/account"},
+		ValidPostLogoutRedirectUris: []string{"https://app.example.test/signed-out"},
+	}}
+	for _, tc := range []struct {
+		action, destination string
+		allowed             bool
+	}{
+		{"Login", "/home", true},
+		{"Login", "https://auth.example.test:443/home", true},
+		{"Login", "https://app.example.test/home", true},
+		{"RedirectThenLogin", "https://app.example.test/account", true},
+		{"RedirectThenLogin", "https://other.example.test/home", false},
+		{"Logout", "https://app.example.test/signed-out", true},
+		{"Logout", "https://app.example.test/account", false},
+		{"Login", "//other.example.test/home", false},
+		{"Login", "/\\other.example.test/home", false},
+		{"Login", "https://user@auth.example.test/home", false},
+	} {
+		t.Run(tc.action+"/"+tc.destination, func(t *testing.T) {
+			if got := toa.allowedCallbackRedirect(req, tc.action, tc.destination); got != tc.allowed {
+				t.Fatalf("allowed = %t, want %t", got, tc.allowed)
+			}
+		})
+	}
+}
