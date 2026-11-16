@@ -1,6 +1,6 @@
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.8.2@sha256:723b1d6e254c0fc96d5cffec860c7e0744d6a3277822b865bb538cf891575e41
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:c68e286cacd87b942ac1939a0a1481461109d6acd3a57dc496969a319a76bbf0
     restart: unless-stopped
     ports:
       - "8000:8080"
@@ -17,7 +17,7 @@ services:
     command: ['start-dev', '--import-realm']
 
   keycloak_postgres:
-    image: postgres:18-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395
+    image: postgres:18-alpine@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015
     restart: unless-stopped
     environment:
       POSTGRES_DB: keycloak
