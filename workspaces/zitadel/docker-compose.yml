@@ -16,7 +16,7 @@ services:
 
   zitadel:
     restart: unless-stopped
-    image: 'ghcr.io/zitadel/zitadel:v4.20.2@sha256:d7ffdecfe037940beeae24c8bb32a420b2adc67fab7bc51554bdae58f9624ef3'
+    image: 'ghcr.io/zitadel/zitadel:v4.20.3@sha256:1b30fea7ed88826dc0a98dacee4e2f2c8b05201fd26f5e4cb5386615b29f7638'
     command: 'start-from-init --masterkey "qdUMkPmL6odwLoAXuL5zZ5ujmO294iKo" --tlsMode disabled'
     volumes:
       - ./machinekey:/machinekey
@@ -60,7 +60,7 @@ services:
       start_period: '20s'
 
   traefik:
-    image: "traefik:v3.7.17@sha256:f4bb143d1135a579b630ed491e17ec50f6f7c9c6a30585ff3d385471d2a86f5a"
+    image: "traefik:v3.7.19@sha256:aa942a00bce033c909bf1f7e861d93761be4b31a035f10d2410d33e38a8f41cf"
     ports:
       - "9080:80"
       - "8080:8080"
