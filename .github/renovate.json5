@@ -54,6 +54,7 @@
     },
     {
       description: "Majors: one PR each, merged by hand",
+      groupName: null,
       matchUpdateTypes: ["major"],
       addLabels: ["major"],
       automerge: false,
