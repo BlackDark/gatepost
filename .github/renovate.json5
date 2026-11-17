@@ -8,7 +8,11 @@
     "github>blackdark/renovate-base//go.json5",
     ":pinVersions",
   ],
-  postUpdateOptions: ["gomodTidy"],
+  updateNotScheduled: false,
+  platformAutomerge: true, // Green PRs merge even on a stale base on purpose; merge queue optional later (agent-presets stack/ci.md).
+  rebaseWhen: "conflicted", // Keep merges cheap; platform automerge stays off without up-to-date enforcement.
+  separateMultipleMajor: true,
+  postUpdateOptions: ["gomodTidy", "gomodUpdateImportPaths"],
   automergeType: "pr",
   // vendor/ is refreshed locally; Renovate cannot run that step.
   ignorePaths: ["**/node_modules/**", "**/vendor/**"],
@@ -47,6 +51,13 @@
       matchUpdateTypes: ["minor"],
       groupName: "all docker minor updates",
       groupSlug: "all-docker-minor",
+    },
+    {
+      description: "Majors: one PR each, merged by hand",
+      groupName: null,
+      matchUpdateTypes: ["major"],
+      addLabels: ["major"],
+      automerge: false,
     },
   ],
 }
