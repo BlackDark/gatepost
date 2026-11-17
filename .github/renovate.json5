@@ -9,7 +9,7 @@
     ":pinVersions",
   ],
   updateNotScheduled: false,
-  platformAutomerge: false, // Enable only after the main ruleset requires up-to-date branches.
+  platformAutomerge: true, // Merge as soon as checks pass; conflict-only rebases avoid CI churn.
   rebaseWhen: "conflicted", // Keep merges cheap; platform automerge stays off without up-to-date enforcement.
   separateMultipleMajor: true,
   postUpdateOptions: ["gomodTidy", "gomodUpdateImportPaths"],
