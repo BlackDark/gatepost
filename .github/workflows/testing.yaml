@@ -21,10 +21,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
         with:
-          go-version-file: go.mod
+          cache_save: ${{ github.workflow == 'CI' && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
 
       # Deliberately no `go get`/`go mod download` step: the repo commits a
       # vendor/ tree and .golangci.yml pins run.modules-download-mode: readonly,
@@ -47,24 +46,9 @@ jobs:
           go mod verify
           git -C ../.. diff --exit-code -- cmd/gatepost-extauthz/go.mod cmd/gatepost-extauthz/go.sum
 
-      - name: Build
-        run: go build ./...
-
-      # ./... is load-bearing: without it `go test` only ever exercised the
-      # current-directory package and src/oidc, src/utils and src/rules were
-      # never compiled - which silently skipped the tamper-rejection suite.
-      # -race because the middleware guards shared discovery/JWKS state behind
-      # locks; -count=1 defeats the test cache so a green run is a real run.
-      - name: Test with the Go CLI
-        run: go test -count=1 -race ./...
-
-      - name: Build gatepost-extauthz
-        working-directory: ./cmd/gatepost-extauthz
-        run: go build ./...
-
-      - name: Test gatepost-extauthz
-        working-directory: ./cmd/gatepost-extauthz
-        run: go test -count=1 -race ./...
+      # ./... and -race are load-bearing; see mise.toml. The same local and CI
+      # command builds and tests the root module and gatepost-extauthz.
+      - run: mise run test
 
   docker:
     name: gatepost-extauthz image

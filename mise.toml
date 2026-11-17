@@ -1,0 +1,40 @@
+[tools]
+go = "1.26.11"
+golangci-lint = "2.15.0"
+bun = "1.4.4"
+actionlint = "1.7.12"
+zizmor = "1.32.0"
+
+[tasks.test]
+description = "Build and test both Go modules"
+run = [
+  "go build ./...",
+  "go test -count=1 -race ./...",
+  "cd cmd/gatepost-extauthz && go build ./...",
+  "cd cmd/gatepost-extauthz && go test -count=1 -race ./...",
+]
+
+[tasks.lint]
+description = "Format, vet, and lint both Go modules"
+run = [
+  "test -z \"$(gofmt -l src cmd)\"",
+  "go vet ./src/...",
+  "golangci-lint run ./src/...",
+  "cd cmd/gatepost-extauthz && go vet ./...",
+  "cd cmd/gatepost-extauthz && golangci-lint run ./...",
+]
+
+[tasks.vulncheck]
+description = "Scan both Go modules for known vulnerabilities"
+run = [
+  "go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./src/...",
+  "cd cmd/gatepost-extauthz && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...",
+]
+
+[tasks."lint:e2e"]
+description = "Lint the E2E TypeScript project"
+run = "cd e2e && bun install --frozen-lockfile && bun run lint"
+
+[tasks.check]
+description = "All non-Docker code checks"
+depends = ["test", "lint", "vulncheck", "lint:e2e"]

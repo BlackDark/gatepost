@@ -11,31 +11,81 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # renovate: datasource=npm depName=renovate
+  RENOVATE_VERSION: "44.221.1"
+
 jobs:
-  lint:
-    name: lint
+  changes:
     if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.areas.outputs.code }}
+      lint: ${{ steps.areas.outputs.lint }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: areas
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            { echo "code=true"; echo "lint=true"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          code=false
+          lint=false
+          while IFS= read -r f; do
+            case "$f" in
+              docs/* | *.md | LICENSE) ;;
+              .github/workflows/ci.yml) code=true; lint=true ;;
+              .github/* | renovate.json | renovate.json5) lint=true ;;
+              *) code=true ;;
+            esac
+          done <<< "$changed"
+          { echo "code=$code"; echo "lint=$lint"; } >> "$GITHUB_OUTPUT"
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
-    uses: $/.github/workflows/lint.yml
+    uses: ./.github/workflows/lint.yml # zizmor: ignore[self-repository]
 
   testing:
-    name: testing
-    if: ${{ !github.event.pull_request.draft }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
-    uses: $/.github/workflows/testing.yaml
+    uses: ./.github/workflows/testing.yaml # zizmor: ignore[self-repository]
+
+  config-lint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        with:
+          install_args: actionlint zizmor
+          cache_save: ${{ github.workflow == 'CI' && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+      - run: actionlint -color .github/workflows/*.yml
+      - run: zizmor --format=github .github/workflows
+      - run: npx --yes --package "renovate@${RENOVATE_VERSION}" -- renovate-config-validator --strict
 
   check:
-    name: check
     if: always()
-    needs: [lint, testing]
+    needs: [changes, lint, testing, config-lint]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Aggregate
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1
