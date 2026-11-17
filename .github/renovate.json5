@@ -9,7 +9,7 @@
     ":pinVersions",
   ],
   updateNotScheduled: false,
-  platformAutomerge: true, // Merge as soon as checks pass; conflict-only rebases avoid CI churn.
+  platformAutomerge: true, // Green PRs merge even on a stale base on purpose; merge queue optional later (agent-presets stack/ci.md).
   rebaseWhen: "conflicted", // Keep merges cheap; platform automerge stays off without up-to-date enforcement.
   separateMultipleMajor: true,
   postUpdateOptions: ["gomodTidy", "gomodUpdateImportPaths"],
